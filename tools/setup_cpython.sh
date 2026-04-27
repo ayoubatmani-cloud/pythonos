@@ -178,6 +178,8 @@ sed -i \
     -e 's/ Modules\/sha1module\.o / /g' \
     -e 's/ Modules\/md5module\.o / /g' \
     -e 's/ Modules\/pwdmodule\.o / /g' \
+    -e 's| Modules/_blake2/blake2module\.o Modules/_blake2/blake2b_impl\.o Modules/_blake2/blake2s_impl\.o | |g' \
+    -e 's| Modules/blake2module\.o | |g' \
     "$CPYTHON_SRC/Makefile"
 # Remove binascii's zlib dependency: clear USE_ZLIB_CRC32 flag and -lz linker flag
 # sha1/md5 use HACL library which we don't provide; remove their CFLAGS entirely
