@@ -136,6 +136,9 @@ async def _kernel_main(
         from kernel.net.stack import net_init
         scheduler.spawn(net_init(nic, "10.0.2.15", "10.0.2.2"), name="net-init")
         log.info("kernel: network stack starting")
+        from kernel.net import repl_server
+        scheduler.spawn(repl_server.start(), name="repl-server")
+        log.info("kernel: TCP REPL server starting (nc localhost 5555)")
 
     # ── Sound (x86_64 only — Intel HDA is not present on arm64 virt) ──────
     if _ARCH == 'x86_64':
@@ -166,7 +169,7 @@ async def _kernel_main(
         if console:
             console.write(text)
         else:
-            log._serial(text)
+            log._serial_raw(text)
 
     shell = Shell(read_char=keyboard.read_char, write=_write)
     scheduler.spawn(shell.run(), name="kshell")

@@ -58,9 +58,9 @@ def _divide_error(ctx: InterruptContext) -> None:
 
 
 @interrupt(IRQ.TIMER)
-async def _timer(ctx: InterruptContext) -> None:
+def _timer(ctx: InterruptContext) -> None:
     from kernel.scheduler import scheduler
-    await scheduler.tick()
+    scheduler.tick(ctx)
 
 
 @interrupt(IRQ.KEYBOARD)

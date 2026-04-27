@@ -19,7 +19,7 @@ DOCKER_IMG := pythonos-builder
 LIBPYTHON  := deps/cpython/libpython3.14.a
 
 QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
-              -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+              -netdev user,id=net0,hostfwd=tcp::5555-:23 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
               -cdrom $(ISO_OUT) -boot d -nographic -serial mon:stdio
@@ -201,7 +201,7 @@ LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
 QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 512M \
                     -no-reboot -no-shutdown \
                     -nographic -serial mon:stdio \
-                    -netdev user,id=net1 -device virtio-net-device,netdev=net1
+                    -netdev user,id=net1,hostfwd=tcp::5556-:23 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img
 

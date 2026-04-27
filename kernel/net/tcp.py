@@ -94,8 +94,9 @@ class TCPConnection:
     snd_ack:    int = 0
     snd_wnd:    int = 65535
     rcv_buf:    bytearray = field(default_factory=bytearray)
-    _rx_event:  asyncio.Event = field(default_factory=asyncio.Event)
-    _connected: asyncio.Future | None = None
+    _rx_event:     asyncio.Event = field(default_factory=asyncio.Event)
+    _accept_event: asyncio.Event = field(default_factory=asyncio.Event)
+    _connected:    asyncio.Future | None = None
 
     async def send_segment(self, flags: int, payload: bytes = b"") -> None:
         seg = TCPSegment(
@@ -114,6 +115,8 @@ class TCPConnection:
 
     async def recv(self, n: int = 4096) -> bytes:
         while not self.rcv_buf:
+            if self.state in (TCPState.CLOSE_WAIT, TCPState.CLOSED):
+                return b""
             self._rx_event.clear()
             await self._rx_event.wait()
         data = bytes(self.rcv_buf[:n])
@@ -129,6 +132,11 @@ class TCPConnection:
             self.state = TCPState.FIN_WAIT_1
 
     def handle_segment(self, seg: TCPSegment) -> None:
+        if self.state == TCPState.SYN_RCVD:
+            if seg.flags & F_ACK:
+                self.state = TCPState.ESTABLISHED
+                self._accept_event.set()
+            return
         if self.state == TCPState.SYN_SENT:
             if seg.flags & F_SYN and seg.flags & F_ACK:
                 self.snd_ack = (seg.seq + 1) & 0xFFFFFFFF
@@ -150,11 +158,34 @@ class TCPConnection:
                 self.snd_ack = (seg.seq + 1) & 0xFFFFFFFF
                 asyncio.ensure_future(self.send_segment(F_ACK))
                 self.state = TCPState.CLOSE_WAIT
+                self._rx_event.set()   # wake any blocked recv()
+
+
+class TCPListener:
+    """Server-side listener returned by tcp.listen(port)."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue = asyncio.Queue()
+
+    async def accept(self) -> TCPConnection:
+        """Wait for the next completed incoming connection."""
+        return await self._queue.get()
+
+    async def _on_syn(self, conn: TCPConnection) -> None:
+        await conn.send_segment(F_SYN | F_ACK)
+        try:
+            await asyncio.wait_for(conn._accept_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            conn.state = TCPState.CLOSED
+            return
+        if conn.state == TCPState.ESTABLISHED:
+            await self._queue.put(conn)
 
 
 class TCPStack:
     def __init__(self) -> None:
         self._connections: dict[tuple, TCPConnection] = {}
+        self._listeners:   dict[int, TCPListener]     = {}
         self._next_port   = 49152   # ephemeral range
 
     def _alloc_port(self) -> int:
@@ -181,6 +212,12 @@ class TCPStack:
         await asyncio.wait_for(conn._connected, timeout=10.0)
         return conn
 
+    async def listen(self, port: int) -> TCPListener:
+        """Start listening on *port*; return a TCPListener for accept()."""
+        listener = TCPListener()
+        self._listeners[port] = listener
+        return listener
+
     def handle_ip_packet(self, pkt: IPv4Packet) -> None:
         if pkt.proto != PROTO_TCP:
             return
@@ -191,6 +228,21 @@ class TCPStack:
         conn = self._connections.get(key)
         if conn:
             conn.handle_segment(seg)
+            return
+        # Incoming SYN to a listening port — start three-way handshake
+        if seg.flags == F_SYN:
+            listener = self._listeners.get(seg.dst_port)
+            if listener:
+                conn = TCPConnection(
+                    local_ip=pkt.dst,
+                    remote_ip=pkt.src,
+                    local_port=seg.dst_port,
+                    remote_port=seg.src_port,
+                    state=TCPState.SYN_RCVD,
+                    snd_ack=(seg.seq + 1) & 0xFFFFFFFF,
+                )
+                self._connections[key] = conn
+                asyncio.ensure_future(listener._on_syn(conn))
 
 # Module-level singleton
 tcp = TCPStack()

@@ -22,4 +22,4 @@ async def read_char() -> str:
         if inb(_COM1_LSR) & 0x01:
             ch = chr(inb(_COM1_RBR) & 0x7F)
             return '\n' if ch == '\r' else ch
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0)

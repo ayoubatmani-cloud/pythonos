@@ -25,4 +25,4 @@ async def read_char() -> str:
         if not (_hal.mmio_read32(_FR) & _RXFE):
             ch = chr(_hal.mmio_read32(_DR) & 0xFF)
             return '\n' if ch == '\r' else ch
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0)

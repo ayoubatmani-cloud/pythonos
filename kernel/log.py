@@ -33,18 +33,32 @@ if _ARCH == 'arm64':
     _SERIAL_FR   = 0x09000018   # PL011 FR
     _SERIAL_TXFF = 1 << 5       # TX FIFO full bit
 
-    def _serial(line: str) -> None:
-        for ch in (line + "\r\n"):
-            while (_hal.mmio_read32(_SERIAL_FR) & _SERIAL_TXFF) != 0:
-                pass
-            _hal.mmio_write8(_SERIAL_DATA, ord(ch) & 0xFF)
+    def _putc(byte: int) -> None:
+        while (_hal.mmio_read32(_SERIAL_FR) & _SERIAL_TXFF) != 0:
+            pass
+        _hal.mmio_write8(_SERIAL_DATA, byte & 0xFF)
+
 else:
     _SERIAL_DATA = 0x3F8
     _SERIAL_LSR  = 0x3F8 + 5
 
-    def _serial(line: str) -> None:
-        for ch in (line + "\r\n"):
-            # Wait for transmit holding register empty
-            while (_hal.inb(_SERIAL_LSR) & 0x20) == 0:
-                pass
-            _hal.outb(_SERIAL_DATA, ord(ch) & 0xFF)
+    def _putc(byte: int) -> None:
+        while (_hal.inb(_SERIAL_LSR) & 0x20) == 0:
+            pass
+        _hal.outb(_SERIAL_DATA, byte & 0xFF)
+
+
+def _serial(line: str) -> None:
+    """Output a log line followed by \\r\\n (for structured log messages)."""
+    for ch in line:
+        _putc(ord(ch))
+    _putc(0x0D)
+    _putc(0x0A)
+
+
+def _serial_raw(text: str) -> None:
+    """Output text verbatim, translating \\n → \\r\\n (for interactive shell I/O)."""
+    for ch in text:
+        if ch == '\n':
+            _putc(0x0D)
+        _putc(ord(ch))
