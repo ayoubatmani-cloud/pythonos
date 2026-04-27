@@ -68,7 +68,7 @@ unicodedata   unicodedata.c
 # (python_hashlib_Hacl_Hash_SHA1_*/MD5_*) which we don't provide
 # _sha1         sha1module.c
 # _md5          md5module.c
-_blake2       _blake2/blake2module.c _blake2/blake2b_impl.c _blake2/blake2s_impl.c
+_blake2       blake2module.c    # consolidated to single file in CPython 3.14
 _hashlib      # skip — needs OpenSSL
 _ssl          # skip — needs OpenSSL
 
