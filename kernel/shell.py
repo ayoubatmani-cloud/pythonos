@@ -119,11 +119,14 @@ class Shell:
 
     @staticmethod
     def _is_incomplete(src: str) -> bool:
-        import codeop
         try:
+            import codeop
             result = codeop.compile_command(src, "<shell>", "exec")
             return result is None   # None = need more input
         except SyntaxError:
+            return False
+        except Exception:
+            # codeop unavailable (e.g. __future__ not frozen yet); assume complete
             return False
 
     # ── Built-in shell commands ───────────────────────────────────────────────

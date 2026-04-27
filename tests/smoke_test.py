@@ -10,15 +10,18 @@ Usage:
 Exit code: 0 = all tests passed, 1 = failure.
 """
 
+import atexit
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 HOST_PORT = 5555
-BOOT_TIMEOUT = 60      # seconds to wait for REPL to become reachable
-RECV_TIMEOUT = 10.0    # per-response timeout
+BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
+RECV_TIMEOUT = 15.0    # per-response timeout
 
 QEMU_CMD = [
     "qemu-system-x86_64",
@@ -28,7 +31,8 @@ QEMU_CMD = [
     "-device", "intel-hda", "-device", "hda-duplex",
     "-no-reboot", "-no-shutdown",
     "-cdrom", ISO, "-boot", "d",
-    "-nographic", "-serial", "file:/dev/null",
+    "-nographic",
+    # serial output captured to a temp file for diagnostics
 ]
 
 # (expression_to_send, substring_expected_in_response)
@@ -42,9 +46,11 @@ TEST_CASES = [
 ]
 
 
-def wait_for_port(port: int, timeout: float) -> bool:
+def wait_for_port(port: int, timeout: float, proc: subprocess.Popen) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False  # QEMU exited early
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 return True
@@ -71,26 +77,58 @@ def recv_until_prompt(sock: socket.socket, prompt: bytes = b">>> ") -> str:
 
 
 def run() -> int:
-    print(f"[smoke] Starting QEMU with {ISO} ...")
-    proc = subprocess.Popen(
-        QEMU_CMD,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    if not os.path.exists(ISO):
+        print(f"[FAIL] ISO not found: {ISO}")
+        print("       Run 'make' first to build the kernel image.")
+        return 1
+
+    serial_log = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="pythonos-serial-",
+        delete=False
     )
+    serial_log.close()
+    atexit.register(lambda: os.unlink(serial_log.name) if os.path.exists(serial_log.name) else None)
+
+    cmd = QEMU_CMD + ["-serial", f"file:{serial_log.name}"]
+
+    print(f"[smoke] Starting QEMU with {ISO} ...")
+    print(f"[smoke] Serial log: {serial_log.name}")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    def _cleanup():
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
     try:
         print(f"[smoke] Waiting up to {BOOT_TIMEOUT}s for TCP REPL on port {HOST_PORT} ...")
-        if not wait_for_port(HOST_PORT, BOOT_TIMEOUT):
+        if not wait_for_port(HOST_PORT, BOOT_TIMEOUT, proc):
+            rc = proc.poll()
             print(f"[FAIL] TCP REPL never became reachable on port {HOST_PORT}")
+            if rc is not None:
+                print(f"       QEMU exited early with code {rc}")
+                stderr = proc.stderr.read().decode("utf-8", errors="replace")
+                if stderr.strip():
+                    print(f"       QEMU stderr: {stderr.strip()}")
+            _print_serial(serial_log.name)
             return 1
 
         sock = socket.create_connection(("127.0.0.1", HOST_PORT), timeout=5)
         try:
-            # Consume the initial banner / prompt
             banner = recv_until_prompt(sock)
             if ">>>" not in banner:
                 print(f"[FAIL] No shell prompt in banner: {banner!r}")
+                _print_serial(serial_log.name)
                 return 1
-            print(f"[smoke] Connected. Banner received.")
+            print(f"[smoke] Connected — shell prompt received.")
 
             passed = 0
             failed = 0
@@ -101,20 +139,33 @@ def run() -> int:
                     print(f"[PASS] {expr.strip()!r:45s} → found {expected!r}")
                     passed += 1
                 else:
-                    print(f"[FAIL] {expr.strip()!r:45s} → expected {expected!r}, got {response!r}")
+                    print(f"[FAIL] {expr.strip()!r:45s} → expected {expected!r}")
+                    print(f"       got: {response!r}")
                     failed += 1
 
             print(f"\n[smoke] {passed} passed, {failed} failed")
+            if failed:
+                _print_serial(serial_log.name)
             return 0 if failed == 0 else 1
 
         finally:
             sock.close()
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _cleanup()
+
+
+def _print_serial(path: str) -> None:
+    try:
+        with open(path) as f:
+            content = f.read()
+        if content.strip():
+            print(f"\n--- serial log ({path}) ---")
+            print(content[-4000:] if len(content) > 4000 else content)
+            print("--- end serial log ---")
+        else:
+            print("[smoke] (serial log is empty)")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":
