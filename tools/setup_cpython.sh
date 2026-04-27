@@ -143,7 +143,7 @@ echo "==> Configuration complete. Log: $DEPS_DIR/configure.log"
 # pyconfig.h.in. Our version overrides the host-detected values with the
 # bare-metal subset our libc actually provides.
 echo "==> Installing bare-metal pyconfig.h..."
-cp "$REPO_ROOT/deps/cpython/pyconfig.h" "$CPYTHON_SRC/pyconfig.h"
+cp "$REPO_ROOT/deps/pyconfig.h" "$CPYTHON_SRC/pyconfig.h"
 
 echo "==> Installing Modules/Setup.local..."
 cp "$REPO_ROOT/deps/Modules.Setup.local" "$CPYTHON_SRC/Modules/Setup.local"
