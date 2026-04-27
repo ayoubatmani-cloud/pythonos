@@ -143,7 +143,7 @@ $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON
 	@cp $(CPYTHON_LIB)/re/_constants.py $(STDLIB_SHIM)/re/
 	@cp $(CPYTHON_LIB)/re/_casefix.py  $(STDLIB_SHIM)/re/
 	@cp $(CPYTHON_LIB)/collections/__init__.py $(STDLIB_SHIM)/collections/
-	@cp $(CPYTHON_LIB)/collections/abc.py      $(STDLIB_SHIM)/collections/
+	@cp $(CPYTHON_LIB)/_collections_abc.py    $(STDLIB_SHIM)/collections/abc.py
 	@cp tools/stdlib_stubs/inspect.py    $(STDLIB_SHIM)/inspect.py
 	@cp tools/stdlib_stubs/pathlib.py    $(STDLIB_SHIM)/pathlib.py
 	@cp tools/stdlib_stubs/functools.py  $(STDLIB_SHIM)/functools.py
