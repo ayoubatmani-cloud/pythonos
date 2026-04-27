@@ -88,6 +88,20 @@ unicodedata   unicodedata.c
 # _ctypes           # could add later
 # _tkinter          # definitely not
 
+*disabled*
+# Modules that configure detects and adds to Setup.stdlib, but we can't build.
+# Listed here to override Setup.stdlib and prevent them from being compiled.
+_blake2
+_hashlib
+_ssl
+_decimal
+_md5
+_sha1
+_sha2
+_sha3
+_hmac
+
+*static*
 # ── Our custom kernel module ───────────────────────────────────────────────
 # Path is relative to Modules/ directory; ../../../ = project root from Modules/
 _hal          ../../../src/hal/hal.c
