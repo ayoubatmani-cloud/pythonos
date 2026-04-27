@@ -75,9 +75,14 @@ def _get_fields(cls):
     for base in reversed(cls.__mro__):
         if base is object:
             continue
-        a = base.__dict__.get('__annotations__', {})
-        anns.update(a)
-    anns = cls.__dict__.get('__annotations__', {})
+        # Access via descriptor (not __dict__) so Python 3.14 lazy annotations evaluate
+        try:
+            base_anns = base.__annotations__
+        except AttributeError:
+            base_anns = {}
+        if not isinstance(base_anns, dict):
+            base_anns = dict(base_anns)
+        anns.update(base_anns)
 
     for name, tp in anns.items():
         if isinstance(tp, type) and tp is _KW_ONLY_TYPE:
