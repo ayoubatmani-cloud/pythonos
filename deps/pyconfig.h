@@ -167,7 +167,7 @@
 /* All modules compiled-in; no shared libraries on bare metal.
  * HAVE_DYNAMIC_LOADING must be set so importdl.c compiles the extension-module
  * loader infrastructure (_Py_ext_module_loader_*, _PyImport_RunModInitFunc)
- * which is used even for statically-linked builtin modules in CPython 3.13. */
+ * which is used even for statically-linked builtin modules in CPython 3.14. */
 #define HAVE_DYNAMIC_LOADING 1
 #define HAVE_DLOPEN      1   /* enables _PyImport_GetDLOpenFlags and dynload_shlib.c */
 #define HAVE_DLFCN_H     1   /* our dlfcn.h stub: dlopen/dlsym/dlclose return NULL */
@@ -195,7 +195,7 @@
 #define PYTHONPATH ""
 #define PREFIX     ""
 #define EXEC_PREFIX ""
-#define VERSION    "3.13"
+#define VERSION    "3.14"
 #define VPATH      ""
 #define _PYTHONFRAMEWORK ""
 
@@ -233,7 +233,7 @@
 /* ── Misc CPython build knobs ────────────────────────────────────────────── */
 #define DOUBLE_IS_LITTLE_ENDIAN_IEEE754 1
 #define FLOAT_IS_LITTLE_ENDIAN_IEEE754  1
-/* PY_UNICODE_TYPE and Py_UNICODE_SIZE are defined by CPython headers in 3.13;
+/* PY_UNICODE_TYPE and Py_UNICODE_SIZE are defined by CPython headers in 3.14;
    do NOT redefine them here (PY_UNICODE_TYPE is deprecated typedef to wchar_t) */
 #define HAVE_WCHAR_H     1   /* wchar_t is provided by GCC freestanding headers */
 /* HAVE_WCSCOLL not defined */

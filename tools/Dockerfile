@@ -1,6 +1,6 @@
-FROM --platform=linux/amd64 python:3.13-slim-bookworm
+FROM --platform=linux/amd64 python:3.14-slim-bookworm
 
-# python:3.13-slim-bookworm ships Python 3.13 at /usr/local/bin/python3.13.
+# python:3.14-slim-bookworm ships Python 3.14 at /usr/local/bin/python3.14.
 # We use Debian Bookworm's package set for the cross-compilation toolchain and
 # ISO tools, all of which are identical to the Ubuntu 24.04 packages we used
 # before. This avoids the deadsnakes PPA launchpadlib failure inside Docker

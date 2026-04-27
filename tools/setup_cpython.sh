@@ -5,18 +5,18 @@
 # with the cross-compiler toolchain installed.
 #
 # Usage:
-#   ./tools/setup_cpython.sh           # downloads CPython 3.13, patches, configures
-#   ./tools/setup_cpython.sh --build   # also compiles libpython3.13.a
+#   ./tools/setup_cpython.sh           # downloads CPython 3.14, patches, configures
+#   ./tools/setup_cpython.sh --build   # also compiles libpython3.14.a
 #
 # Output: deps/cpython/ — configured CPython source tree
-#         deps/cpython/libpython3.13.a — static library (with --build)
+#         deps/cpython/libpython3.14.a — static library (with --build)
 #
 # Two-phase build strategy:
 #   Phase 1 — ./configure runs with the HOST compiler (gcc) so that all
 #              feature probes can compile, link, and execute on the build machine.
 #              ac_cv_* cache variables pre-answer the probes that would wrongly
 #              detect POSIX features we don't have.
-#   Phase 2 — make libpython3.13.a is driven with the CROSS compiler
+#   Phase 2 — make libpython3.14.a is driven with the CROSS compiler
 #              (x86_64-elf-gcc = x86_64-linux-gnu-gcc in Docker) plus our
 #              bare-metal CFLAGS. Our pyconfig.h (installed after configure)
 #              overrides everything configure detected, so the resulting .o
@@ -24,9 +24,9 @@
 
 set -euo pipefail
 
-CPYTHON_VERSION="3.13.0"
+CPYTHON_VERSION="3.14.4"
 CPYTHON_URL="https://www.python.org/ftp/python/${CPYTHON_VERSION}/Python-${CPYTHON_VERSION}.tar.xz"
-CPYTHON_SHA256="086de5882e3cb310d4dca48457522e2e48018ecd43da9cdf827f6a0759efb07d"
+CPYTHON_SHA256="d923c51303e38e249136fc1bdf3568d56ecb03214efdef48516176d3d7faaef8"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS_DIR="$REPO_ROOT/deps"
@@ -149,23 +149,20 @@ echo "==> Installing Modules/Setup.local..."
 cp "$REPO_ROOT/deps/Modules.Setup.local" "$CPYTHON_SRC/Modules/Setup.local"
 
 # ── 5b. Post-configure Makefile patches ──────────────────────────────────────
-# In CPython 3.13, some modules moved out of Modules/ but the configure-generated
-# Makefile still lists stale entries. Patch them here:
+# Patch the configure-generated Makefile to work with our bare-metal build:
 #   - _warnings: code is in Python/_warnings.c (already in Python/*.o) — remove
 #   - _string: code is in Objects/unicodeobject.c — remove
-#   - _csvmodule.c renamed to _csv.c — fix object and rule
-#   - sha256module.c / sha512module.c → sha2module.c (needs HACL) — skip for now
+#   - _csv.c (renamed from _csvmodule.c in CPython 3.13, unchanged in 3.14)
+#   - sha256module.c / sha512module.c → sha2module.c (needs HACL) — skip
 #   - hal path: ../../src/hal → ../../../src/hal (one more level up from Modules/)
 echo "==> Patching configure-generated Makefile..."
-# Redirect _freeze_module and _bootstrap_python to python3.13 — both binaries
-# link libpython with -fno-pie which fails Ubuntu 24.04's PIE-only linker.
-# python3.13 MUST be used here (not python3/python3.12): the frozen module
-# bytecode must be compiled with the same Python version as the interpreter
-# (RESUME opcode = 149 in 3.13; Python 3.12 has RESUME = 151, which causes
-# the bare-metal interpreter to misidentify RESUME as BINARY_OP_ADD_INT).
+# Redirect _freeze_module and _bootstrap_python to python3.14 — both binaries
+# link libpython with -fno-pie which fails PIE-only linkers.
+# python3.14 MUST be used here: frozen bytecode must match the interpreter version
+# (RESUME opcode = 128 in 3.14; older versions have different numbering).
 sed -i \
-    -e 's|^PYTHON_FOR_FREEZE=.*$|PYTHON_FOR_FREEZE=python3.13|' \
-    -e 's|^FREEZE_MODULE_BOOTSTRAP=.*$|FREEZE_MODULE_BOOTSTRAP=python3.13 ./Programs/_freeze_module.py|' \
+    -e 's|^PYTHON_FOR_FREEZE=.*$|PYTHON_FOR_FREEZE=python3.14|' \
+    -e 's|^FREEZE_MODULE_BOOTSTRAP=.*$|FREEZE_MODULE_BOOTSTRAP=python3.14 ./Programs/_freeze_module.py|' \
     -e 's|^FREEZE_MODULE_BOOTSTRAP_DEPS=.*$|FREEZE_MODULE_BOOTSTRAP_DEPS=Programs/_freeze_module.py|' \
     -e 's|^FREEZE_MODULE_DEPS=.*$|FREEZE_MODULE_DEPS=$(srcdir)/Programs/_freeze_module.py|' \
     "$CPYTHON_SRC/Makefile"
@@ -241,19 +238,17 @@ touch "$CPYTHON_SRC/Modules/config.c"
 # ── 5c. Pre-generate frozen module headers ────────────────────────────────────
 # Programs/_freeze_module is a HOST tool that must compile and run on the build
 # host. Since we cross-compile with -ffreestanding/-fno-pie, the binary can't
-# be built normally. Instead, use the pure-Python implementation with python3.13.
+# be built normally. Instead, use the pure-Python implementation with python3.14.
 #
-# CRITICAL: python3.13 must be used (not python3/python3.12). The frozen
-# bytecode must use the same opcode numbering as the interpreter:
-#   CPython 3.13: RESUME = 149    Python 3.12: RESUME = 151 (WRONG!)
-# Using python3.12 produces frozen modules with opcode 151 at instruction 0,
-# which the 3.13 interpreter dispatches as BINARY_OP_ADD_INT, causing an
-# immediate page fault before any Python code can run.
-FREEZE_PY=$(command -v python3.13 2>/dev/null || command -v python3 2>/dev/null)
+# CRITICAL: python3.14 must be used. The frozen bytecode must use the same
+# opcode numbering as the interpreter (RESUME = 128 in 3.14). Using a different
+# Python version produces bytecode with wrong opcode numbers at instruction 0,
+# causing an immediate fault before any Python code can run.
+FREEZE_PY=$(command -v python3.14 2>/dev/null || command -v python3 2>/dev/null)
 FREEZE_PY_VER=$("$FREEZE_PY" -c "import sys; print(sys.version_info[:2])" 2>/dev/null)
-if [[ "$FREEZE_PY_VER" != "(3, 13)" ]]; then
-    echo "ERROR: python3.13 is required to generate frozen modules but found $FREEZE_PY ($FREEZE_PY_VER)"
-    echo "       Install python3.13 and retry."
+if [[ "$FREEZE_PY_VER" != "(3, 14)" ]]; then
+    echo "ERROR: python3.14 is required to generate frozen modules but found $FREEZE_PY ($FREEZE_PY_VER)"
+    echo "       Install python3.14 and retry."
     exit 1
 fi
 echo "==> Pre-generating frozen module headers with $FREEZE_PY ($FREEZE_PY_VER)..."
@@ -278,7 +273,7 @@ touch Python/frozen_modules/*.h 2>/dev/null || true
 
 # ── 6. Optionally build (Phase 2) ─────────────────────────────────────────────
 if [[ "${1:-}" == "--build" ]]; then
-    echo "==> Phase 2: Building libpython3.13.a with cross-compiler..."
+    echo "==> Phase 2: Building libpython3.14.a with cross-compiler..."
     echo "    CC=$CC"
     echo "    CFLAGS=$TARGET_CFLAGS"
 
@@ -286,9 +281,9 @@ if [[ "${1:-}" == "--build" ]]; then
     # effect — make does not track compiler flag changes in its dependency graph.
     echo "==> Cleaning previous build artifacts..."
     find "$CPYTHON_SRC" -name '*.o' -delete 2>/dev/null || true
-    rm -f "$CPYTHON_SRC/libpython3.13.a"
+    rm -f "$CPYTHON_SRC/libpython3.14.a"
 
-    make -j"$(nproc)" libpython3.13.a \
+    make -j"$(nproc)" libpython3.14.a \
         CC="$CC" \
         AR="$AR" \
         RANLIB="$RANLIB" \
@@ -298,14 +293,14 @@ if [[ "${1:-}" == "--build" ]]; then
 
     # Copy outputs where the Makefile expects them
     mkdir -p "$DEPS_DIR/cpython/Include"
-    cp libpython3.13.a "$DEPS_DIR/cpython/libpython3.13.a"
+    cp libpython3.14.a "$DEPS_DIR/cpython/libpython3.14.a"
     cp -r Include/. "$DEPS_DIR/cpython/Include/"
     cp "$REPO_ROOT/deps/pyconfig.h" "$DEPS_DIR/cpython/pyconfig.h"
-    echo "==> Done. Library: $DEPS_DIR/cpython/libpython3.13.a"
+    echo "==> Done. Library: $DEPS_DIR/cpython/libpython3.14.a"
 else
     echo ""
     echo "Next: ./tools/setup_cpython.sh --build"
-    echo "  or: cd $CPYTHON_SRC && make -j\$(nproc) libpython3.13.a CC=$CC CFLAGS=..."
+    echo "  or: cd $CPYTHON_SRC && make -j\$(nproc) libpython3.14.a CC=$CC CFLAGS=..."
 fi
 
 echo "==> CPython bare-metal setup complete."

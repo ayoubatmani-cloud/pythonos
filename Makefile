@@ -1,18 +1,29 @@
 # PythonOS build system
 #
-# Requires cross-compilation toolchain + NASM + GRUB + xorriso.
-# On macOS, use the Docker target:
-#   make docker-build && make docker-iso
+# Two build paths:
 #
-# On Linux with the toolchain installed:
-#   make iso
+#   Docker path (macOS or any Linux — recommended for first-time setup):
+#     make docker-build       # build cross-compilation image (once)
+#     make docker-iso         # build everything inside Docker → pythonos.iso
+#     make qemu-iso           # boot in QEMU
+#
+#   Native path (x86_64 Linux only):
+#     make deps               # install host build tools (requires sudo)
+#     make cpython-build      # cross-compile libpython3.14.a + freeze kernel
+#                             #   (always runs in Docker; python3.14 required there)
+#     make iso                # compile + link + create ISO (no Python needed)
+#     make qemu-iso           # boot in QEMU
+#
+# make cpython-build always uses Docker because:
+#   1. Cross-compiling libpython3.14.a requires a patched freestanding toolchain.
+#   2. Freezing kernel modules requires python3.14 exactly — bytecode is
+#      version-specific and must match the libpython being linked.
 
 ARCH       := x86_64
 TARGET     := $(ARCH)-elf
 
-# Prefer the bare-metal cross-compiler (x86_64-elf-*); fall back to the
-# Linux-hosted equivalent (x86_64-linux-gnu-*) when running on x86_64 Linux
-# without the Docker toolchain aliases installed.
+# Prefer the bare-metal cross-compiler (Docker alias); fall back to the
+# Linux-hosted equivalent when running natively after 'make deps'.
 ifneq ($(shell which $(TARGET)-gcc 2>/dev/null),)
   CC := $(TARGET)-gcc
   LD := $(TARGET)-ld
@@ -24,21 +35,17 @@ else
   LD := ld
 endif
 
-AS         := nasm
+AS := nasm
 
-# CPython source dir — populated by: make cpython-build
+# CPython artifacts — populated by: make cpython-build
 CPYTHON    := deps/cpython
 PYTHON_INC := $(CPYTHON)/Include
-PYTHON_LIB := $(CPYTHON)/libpython3.13.a
+PYTHON_LIB := $(CPYTHON)/libpython3.14.a
 
 # ── CFLAGS: two sets ──────────────────────────────────────────────────────────
 #
-# BOOT_CFLAGS — for src/boot/*.c (runs in interrupt context or before Python).
-#   No SSE/MMX/x87: the FPU is not yet initialized when these run, and ISR
-#   handlers must not use SSE between FXSAVE and FXRSTOR.
-#
-# KERN_CFLAGS — for src/libc/*.c and src/hal/hal.c (runs in task context with
-#   full FPU state saved by isr_stubs.asm). SSE2 is the default for x86-64.
+# BOOT_CFLAGS — src/boot/*.c: runs before FPU init, must avoid SSE/x87.
+# KERN_CFLAGS — src/libc/*.c, src/hal/hal.c: full FPU state saved by ISR stubs.
 
 COMMON_CFLAGS := -std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
                  -mno-red-zone -Wall -Wextra \
@@ -48,16 +55,16 @@ COMMON_CFLAGS := -std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
 BOOT_CFLAGS := $(COMMON_CFLAGS) -mno-sse -mno-sse2 -mno-mmx -mno-80387
 KERN_CFLAGS := $(COMMON_CFLAGS)
 
-ASFLAGS    := -f elf64
+ASFLAGS := -f elf64
 
-# libgcc provides __udivti3, __muldf3 etc. for the cross-compiler
-LIBGCC     := $(shell $(CC) -print-libgcc-file-name 2>/dev/null || echo "")
+# libgcc provides __udivti3, __muldf3 etc.
+LIBGCC := $(shell $(CC) -print-libgcc-file-name 2>/dev/null || echo "")
 
-LDFLAGS    := -T linker.ld -nostdlib -z max-page-size=0x1000
+LDFLAGS := -T linker.ld -nostdlib -z max-page-size=0x1000
 
-BUILD      := build
-ISO_DIR    := iso
-ISO_OUT    := pythonos.iso
+BUILD   := build
+ISO_DIR := iso
+ISO_OUT := pythonos.iso
 
 # ── Source files ──────────────────────────────────────────────────────────────
 
@@ -78,8 +85,10 @@ KERNEL_ELF := $(BUILD)/pythonos.elf
 
 # ── Rules ─────────────────────────────────────────────────────────────────────
 
-.PHONY: all iso clean docker-build docker-iso docker-qemu \
-        qemu qemu-serial qemu-iso cpython cpython-build
+.PHONY: all iso clean deps \
+        docker-build docker-iso docker-qemu \
+        qemu qemu-serial qemu-iso qemu-debug \
+        cpython cpython-build _freeze
 
 all: $(KERNEL_ELF)
 
@@ -111,7 +120,6 @@ ENCODINGS_SRC := deps/cpython-src/Lib/encodings
 CPYTHON_LIB   := deps/cpython-src/Lib
 STDLIB_SHIM   := $(BUILD)/stdlib_shim
 
-# Individual stdlib files needed by the kernel (no socket/selectors/dis deps).
 STDLIB_REAL_FILES := \
 	enum.py typing.py operator.py types.py \
 	reprlib.py keyword.py copy.py weakref.py _weakrefset.py contextlib.py \
@@ -147,13 +155,35 @@ $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON
 	@cp tools/stdlib_stubs/linecache.py      $(STDLIB_SHIM)/linecache.py
 	@touch $@
 
-$(BUILD)/frozen_kernel.c: $(shell find kernel -name '*.py') \
-                           $(shell find asyncio -name '*.py') \
-                           $(shell find $(ENCODINGS_SRC) -name '*.py') \
+# _freeze — runs python3.14 freeze_kernel.py.
+# Called inside Docker by cpython-build and docker-iso (python3.14 guaranteed
+# there). On native Linux, only reached if python3.14 is already present;
+# otherwise cpython-build pre-generates the file so this rule is skipped.
+_freeze: $(STDLIB_SHIM)/.stamp
+	@mkdir -p $(BUILD)
+	python3 tools/freeze_kernel.py kernel asyncio $(ENCODINGS_SRC) \
+	    $(STDLIB_SHIM) $(BUILD)/frozen_kernel.c
+
+# frozen_kernel.c is generated by 'make cpython-build' (inside Docker).
+# On a native Linux build after cpython-build, the file already exists and
+# this rule is a no-op (make sees the targets are up to date).
+# If python3.14 happens to be available natively it is used directly.
+$(BUILD)/frozen_kernel.c: $(shell find kernel asyncio -name '*.py' 2>/dev/null) \
                            $(STDLIB_SHIM)/.stamp
 	@mkdir -p $(BUILD)
-	python3.13 tools/freeze_kernel.py kernel asyncio $(ENCODINGS_SRC) \
-	    $(STDLIB_SHIM) $(BUILD)/frozen_kernel.c
+	@if python3 --version >/dev/null 2>&1; then \
+	    python3 tools/freeze_kernel.py kernel asyncio $(ENCODINGS_SRC) \
+	        $(STDLIB_SHIM) $(BUILD)/frozen_kernel.c; \
+	elif [ -f $(BUILD)/frozen_kernel.c ]; then \
+	    echo "==> frozen_kernel.c already built (python3.14 not found — using cached)"; \
+	    touch $(BUILD)/frozen_kernel.c; \
+	else \
+	    echo ""; \
+	    echo "ERROR: python3.14 not found and no pre-built frozen_kernel.c."; \
+	    echo "Run 'make cpython-build' first — it generates frozen_kernel.c inside Docker."; \
+	    echo ""; \
+	    exit 1; \
+	fi
 
 $(BUILD)/frozen_kernel.o: $(BUILD)/frozen_kernel.c
 	@mkdir -p $(BUILD)
@@ -175,7 +205,6 @@ iso: $(KERNEL_ELF)
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 
-# Full device set: Q35 chipset, 512 MiB RAM, VirtIO-net, Intel HDA
 QEMU_BASE := -machine q35 -cpu qemu64 -m 512M \
              -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
              -device intel-hda -device hda-duplex \
@@ -203,28 +232,66 @@ qemu-debug: $(KERNEL_ELF)
 	  -ex "break kernel_main" \
 	  -ex "continue"
 
-# ── Docker (macOS host) ───────────────────────────────────────────────────────
+# ── Docker ────────────────────────────────────────────────────────────────────
 
 DOCKER_IMG := pythonos-builder
 
 docker-build:
 	docker build --platform linux/amd64 --load -t $(DOCKER_IMG) -f tools/Dockerfile .
 
+# cpython-build: cross-compile libpython3.14.a AND generate frozen_kernel.c.
+# Runs entirely inside Docker (python3.14 + cross-toolchain guaranteed there).
+# After this target, 'make iso' can run natively without needing python3.14.
+cpython-build: docker-build
+	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	  bash -c "./tools/setup_cpython.sh --build && make _freeze"
+
+# docker-iso: build everything inside Docker. Use this on macOS or when you
+# prefer not to install native build tools.
 docker-iso: docker-build
 	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
-	  bash -c "make cpython-build && make iso"
+	  bash -c "./tools/setup_cpython.sh --build && make _freeze && make iso"
 
 docker-qemu: docker-iso
 	qemu-system-$(ARCH) $(QEMU_BASE) \
 	  -cdrom $(ISO_OUT) -boot d -nographic -serial mon:stdio
 
-# ── CPython bare-metal build ──────────────────────────────────────────────────
-
+# Legacy alias kept for compatibility
 cpython:
 	./tools/setup_cpython.sh
 
-cpython-build:
-	./tools/setup_cpython.sh --build
+# ── deps — install native host build tools ────────────────────────────────────
+#
+# Installs the tools needed for 'make iso' on Linux.
+# Does NOT install python3.14 or Docker — cpython-build handles those.
+# On macOS, native build is not supported; use 'make docker-iso' instead.
+
+deps:
+	@if command -v apt-get >/dev/null 2>&1; then \
+	    echo "==> Installing build dependencies via apt-get..."; \
+	    sudo apt-get update -qq && sudo apt-get install -y \
+	        nasm \
+	        gcc binutils \
+	        grub-pc-bin grub-common \
+	        xorriso mtools \
+	        qemu-system-x86; \
+	    echo ""; \
+	    echo "==> Host tools installed."; \
+	    echo "Next steps:"; \
+	    echo "  make cpython-build   # cross-compile libpython + freeze kernel (Docker)"; \
+	    echo "  make iso             # compile + link + create ISO (native)"; \
+	    echo "  make qemu-iso        # boot in QEMU"; \
+	elif command -v brew >/dev/null 2>&1; then \
+	    echo "macOS native build is not supported (requires x86 cross-toolchain)."; \
+	    echo "Use Docker instead:"; \
+	    echo "  make docker-build && make docker-iso"; \
+	    echo ""; \
+	    echo "Installing QEMU for running the ISO:"; \
+	    brew install qemu; \
+	else \
+	    echo "Unsupported platform. Install these packages manually:"; \
+	    echo "  nasm gcc binutils grub-pc-bin grub-common xorriso mtools qemu-system-x86"; \
+	fi
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 

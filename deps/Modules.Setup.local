@@ -6,10 +6,10 @@
 # Format: <module_name> <source_files...> [<compiler_flags>]
 # A '*' at the start of a section header means "always compile in".
 #
-# CPython 3.13 file naming notes:
+# CPython 3.14 file naming notes (changes from 3.12 baseline, unchanged in 3.14):
 #   - _warnings: now in Python/_warnings.c (included via Python objects)
 #   - _string: now in Objects/unicodeobject.c (included via Object objects)
-#   - _csv: renamed from _csvmodule.c to _csv.c
+#   - _csv: renamed from _csvmodule.c to _csv.c (since 3.13, unchanged)
 #   - sha256/sha512: merged into sha2module.c (_sha2), requires HACL lib
 #   - sha1/md5: now use HACL backends too
 
@@ -33,7 +33,7 @@ time          timemodule.c    # uses our clock_gettime
 math          mathmodule.c    # uses libgcc for float ops
 _struct       _struct.c
 binascii      binascii.c
-_csv          _csv.c          # renamed from _csvmodule.c in CPython 3.13
+_csv          _csv.c          # renamed from _csvmodule.c in CPython 3.13, unchanged in 3.14
 _json         _json.c
 _random       _randommodule.c
 _bisect       _bisectmodule.c
@@ -61,9 +61,9 @@ _multibytecodec cjkcodecs/multibytecodec.c
 unicodedata   unicodedata.c
 
 # ── Hash / crypto ─────────────────────────────────────────────────────────
-# sha256/sha512 merged into _sha2 in CPython 3.13; _sha2 requires HACL
+# sha256/sha512 merged into _sha2 in CPython 3.13 (unchanged in 3.14); requires HACL
 # library (Modules/_hacl/) to be built first — skip for initial boot.
-# sha1 and md5 still have standalone modules in CPython 3.13:
+# sha1 and md5 also use HACL backends (since 3.13, unchanged in 3.14):
 # _sha1 and _md5 excluded: sha1module.c/md5module.c use HACL crypto library
 # (python_hashlib_Hacl_Hash_SHA1_*/MD5_*) which we don't provide
 # _sha1         sha1module.c

@@ -1,6 +1,6 @@
 # PythonOS
 
-A bare-metal operating system where CPython 3.13 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell.
+A bare-metal operating system where CPython 3.14 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell.
 
 ## Quick Start
 
@@ -8,14 +8,14 @@ A bare-metal operating system where CPython 3.13 **is** the kernel — not a pro
 
 - Docker (for cross-compilation toolchain)
 - QEMU (`brew install qemu` on macOS)
-- CPython 3.13 source tree (fetched by the build)
+- CPython 3.14 source tree (fetched by the build)
 
 ### Build
 
 ```bash
 # First time: fetch and cross-compile CPython for bare metal (~10 min)
 make docker-build       # build the Docker cross-compilation image
-make cpython-build      # build libpython3.13.a inside Docker
+make cpython-build      # build libpython3.14.a inside Docker
 
 # Every subsequent build
 make docker-iso         # freeze kernel, compile, link, create pythonos.iso
@@ -50,7 +50,7 @@ Expected boot output:
 [PythonOS] INFO  net: configured 10.0.2.15 gw=10.0.2.2
 
 PythonOS kernel shell
-Python 3.13.0
+Python 3.14.0
 Type 'help' for kernel commands.
 
 >>>
@@ -126,12 +126,12 @@ tools/
   stdlib_stubs/      bare-metal replacements for stdlib modules that assume
                      a POSIX host (dataclasses, functools, os, ctypes, …)
   Dockerfile         Ubuntu 24.04 cross-compilation environment
-  setup_cpython.sh   fetch, patch, and configure CPython 3.13 for bare metal
+  setup_cpython.sh   fetch, patch, and configure CPython 3.14 for bare metal
 
 deps/
   Modules.Setup.local  CPython built-in module list (excludes socket/select/…)
-  cpython/           built libpython3.13.a + headers (generated; not in git)
-  cpython-src/       CPython 3.13.0 source (generated; not in git)
+  cpython/           built libpython3.14.a + headers (generated; not in git)
+  cpython-src/       CPython 3.14.0 source (generated; not in git)
 ```
 
 ---
@@ -140,7 +140,7 @@ deps/
 
 ### CPython on Bare Metal
 
-CPython 3.13.0 is compiled as a static library (`libpython3.13.a`) linked directly into the kernel ELF. `Py_Initialize()` runs before any Python code; from that point forward, the Python interpreter is the kernel runtime.
+CPython 3.14.0 is compiled as a static library (`libpython3.14.a`) linked directly into the kernel ELF. `Py_Initialize()` runs before any Python code; from that point forward, the Python interpreter is the kernel runtime.
 
 All kernel Python modules are **frozen** — compiled to bytecode and embedded in the ELF as C arrays. There is no filesystem required for `import`. The freeze tool (`tools/freeze_kernel.py`) runs at build time and produces `build/frozen_kernel.c`.
 
@@ -179,7 +179,7 @@ Several stdlib modules assume a POSIX host and break on bare metal. `tools/stdli
 | `os.py` | The real `os.py` imports `posix` which expects `_have_functions`. Minimal stub. |
 | `ctypes/__init__.py` | `_ctypes` is not compiled in (requires libffi). Minimal stub for `addressof`; prefer `_hal.dma_alloc` for DMA. |
 | `random.py` | Minimal LCG PRNG seeded from PIT port reads. |
-| `traceback.py` | CPython 3.13's version imports `_colorize` (not compiled in). Minimal format_exc. |
+| `traceback.py` | CPython 3.14's version imports `_colorize` (not compiled in). Minimal format_exc. |
 | `linecache.py` | No source files on bare metal; no-op cache. |
 | `inspect.py`, `pathlib.py` | Minimal stubs used during module discovery. |
 

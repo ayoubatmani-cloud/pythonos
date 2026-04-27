@@ -15,7 +15,7 @@ __pycache__/
 # CPython dependency tree (large; rebuild with make cpython-build)
 deps/cpython/
 deps/cpython-src/
-deps/Python-3.13.0.tar.xz
+deps/Python-3.14.4.tar.xz
 deps/build.log
 deps/configure.log
 

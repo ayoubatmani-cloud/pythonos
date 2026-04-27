@@ -95,7 +95,7 @@ static void parse_mmap(mb2_info_t *mb2) {
 }
 
 // ── Thread-Local Storage setup ───────────────────────────────────────────────
-// CPython 3.13 uses initial-exec TLS via %fs-relative addressing (e.g. %fs:-8).
+// CPython 3.14 uses initial-exec TLS via %fs-relative addressing (e.g. %fs:-8).
 // Without a valid FS base the first TLS access faults at 0xfffffffffffffff8.
 // Allocate a small zeroed block and set IA32_FS_BASE (MSR 0xC0000100) to
 // point 32 bytes in, giving 32 bytes of usable TLS below FS:0.

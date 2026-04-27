@@ -4,18 +4,17 @@ freeze_kernel.py — Compile Python kernel modules into a C source file
 that embeds them as frozen modules, linked directly into the kernel ELF.
 
 Usage:
-    python3.13 tools/freeze_kernel.py <src_dir> [<src_dir>...] <output.c>
+    python3 tools/freeze_kernel.py <src_dir> [<src_dir>...] <output.c>
 
-IMPORTANT: must be run with Python 3.13 (not 3.12 or earlier). The frozen
-bytecode opcode numbering must match the cross-compiled CPython 3.13
-interpreter. In Python 3.13, RESUME = 149; in Python 3.12, RESUME = 151.
-Using the wrong Python version causes the kernel to crash immediately on
-any Python function entry, since the interpreter mistakes RESUME for
-BINARY_OP_ADD_INT.
+IMPORTANT: must be run with Python 3.14 (matching the compiled libpython3.14.a).
+The frozen bytecode opcode numbering must match the cross-compiled CPython 3.14
+interpreter. In Python 3.14, RESUME = 128. Using a different Python version
+causes the kernel to crash immediately on any Python function entry, since the
+interpreter misidentifies the first opcode.
 
 The output is a C file that, when linked into the kernel, merges the frozen
 modules from all src_dirs with the existing CPython standard frozen modules
-(bootstrap, codecs, io, etc.) from libpython3.13.a. The merge happens at
+(bootstrap, codecs, io, etc.) from libpython3.14.a. The merge happens at
 runtime in install_frozen_kernel(), which must be called BEFORE Py_Initialize().
 """
 
@@ -23,9 +22,9 @@ import marshal
 import sys
 from pathlib import Path
 
-if sys.version_info[:2] != (3, 13):
-    print(f"ERROR: freeze_kernel.py requires Python 3.13, got {sys.version}", file=sys.stderr)
-    print("       The frozen bytecode opcode numbering must match the CPython 3.13 interpreter.", file=sys.stderr)
+if sys.version_info[:2] != (3, 14):
+    print(f"ERROR: freeze_kernel.py requires Python 3.14, got {sys.version}", file=sys.stderr)
+    print("       The frozen bytecode opcode numbering must match the CPython 3.14 interpreter.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -89,7 +88,7 @@ def emit_c(frozen: dict[str, tuple[bytes, bool]], output: Path) -> None:
         lines.append(f'    {{"{name}", _frozen_{safe}, {size}, {pkg}}},')
     lines += ["    {NULL, NULL, 0, 0}", "};", ""]
 
-    # CPython 3.13 checks PyImport_FrozenModules (custom) separately from
+    # CPython 3.14 checks PyImport_FrozenModules (custom) separately from
     # _PyImport_FrozenStdlib (standard bootstrap/codecs/io/...).  We only
     # need to populate the custom slot with our additions (encodings + kernel).
     # The standard frozen modules remain accessible via _PyImport_FrozenStdlib.
