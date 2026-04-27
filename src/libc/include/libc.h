@@ -20,6 +20,7 @@
 // ── errno ─────────────────────────────────────────────────────────────────────
 extern int errno;
 #define ENOENT    2
+#define EINTR     4
 #define ENOMEM   12
 #define EACCES   13
 #define EEXIST   17
