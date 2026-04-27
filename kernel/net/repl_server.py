@@ -1,14 +1,14 @@
 """
 kernel.net.repl_server — Multi-session TCP kernel REPL server.
 
-Listens on TCP port 23.  Each connection spawns an independent asyncio task
+Listens on TCP port 5000.  Each connection spawns an independent asyncio task
 running a full kernel Shell with access to all live kernel objects.  Multiple
 sessions can exist simultaneously — this demonstrates that Python IS a
 multitasking kernel, not just a single serial console.
 
 Connect from the QEMU host after `make run` or `make run-arm64`:
-    nc localhost 5555     (x86_64 — QEMU forwards host:5555 → guest:23)
-    nc localhost 5556     (arm64  — when arm64 networking is added)
+    nc localhost 5555     (x86_64 — QEMU forwards host:5555 → guest:5000)
+    nc localhost 5556     (arm64  — QEMU forwards host:5556 → guest:5000)
 
 Each session has its own namespace snapshot but shares live kernel objects
 (pci, vfs, scheduler, net, etc.).  Changes made in one session are visible
@@ -20,7 +20,7 @@ import kernel.log as log
 from kernel.shell import Shell
 from kernel.scheduler import scheduler
 
-_PORT = 23
+_PORT = 5000
 
 
 async def start(port: int = _PORT) -> None:

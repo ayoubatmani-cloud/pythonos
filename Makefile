@@ -19,7 +19,7 @@ DOCKER_IMG := pythonos-builder
 LIBPYTHON  := deps/cpython/libpython3.14.a
 
 QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
-              -netdev user,id=net0,hostfwd=tcp::5555-:23 -device virtio-net-pci,netdev=net0 \
+              -netdev user,id=net0,hostfwd=tcp::5555-:5000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
               -cdrom $(ISO_OUT) -boot d -nographic -serial mon:stdio
@@ -42,8 +42,8 @@ stop:
 
 restart: stop start
 
-test:
-	@echo "No tests yet." && exit 0
+test: $(ISO_OUT)
+	python3 tests/smoke_test.py $(ISO_OUT)
 
 clean:
 	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
@@ -143,9 +143,10 @@ STDLIB_SHIM   := $(BUILD)/stdlib_shim
 STDLIB_REAL_FILES := \
 	enum.py typing.py operator.py types.py \
 	reprlib.py keyword.py copy.py weakref.py _weakrefset.py contextlib.py \
-	warnings.py copyreg.py struct.py codeop.py
+	warnings.py copyreg.py struct.py codeop.py __future__.py
 
 $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON_LIB)/codeop.py \
+                        $(CPYTHON_LIB)/__future__.py \
                         tools/stdlib_stubs/inspect.py \
                         tools/stdlib_stubs/pathlib.py \
                         tools/stdlib_stubs/functools.py \
@@ -201,7 +202,7 @@ LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
 QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 512M \
                     -no-reboot -no-shutdown \
                     -nographic -serial mon:stdio \
-                    -netdev user,id=net1,hostfwd=tcp::5556-:23 -device virtio-net-device,netdev=net1
+                    -netdev user,id=net1,hostfwd=tcp::5556-:5000 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img
 
