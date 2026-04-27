@@ -111,9 +111,9 @@ async def _kernel_main(
 
     # ── Keyboard / serial input ────────────────────────────────────────────
     if _ARCH == 'x86_64':
-        from kernel.drivers.keyboard import keyboard
-        keyboard.init()
-        log.info("kernel: keyboard driver ready")
+        from kernel.drivers.input import com1
+        keyboard = com1
+        log.info("kernel: COM1 serial input ready")
     else:
         from kernel.drivers.input import pl011
         keyboard = pl011

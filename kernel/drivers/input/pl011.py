@@ -23,5 +23,6 @@ async def read_char() -> str:
     """Wait for the next character from the PL011 UART and return it."""
     while True:
         if not (_hal.mmio_read32(_FR) & _RXFE):
-            return chr(_hal.mmio_read32(_DR) & 0xFF)
+            ch = chr(_hal.mmio_read32(_DR) & 0xFF)
+            return '\n' if ch == '\r' else ch
         await asyncio.sleep(0.005)
