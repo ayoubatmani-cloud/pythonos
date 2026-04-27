@@ -300,6 +300,7 @@ if [[ "${1:-}" == "--build" ]]; then
     mkdir -p "$DEPS_DIR/cpython/Include"
     cp libpython3.13.a "$DEPS_DIR/cpython/libpython3.13.a"
     cp -r Include/. "$DEPS_DIR/cpython/Include/"
+    cp "$REPO_ROOT/deps/pyconfig.h" "$DEPS_DIR/cpython/pyconfig.h"
     echo "==> Done. Library: $DEPS_DIR/cpython/libpython3.13.a"
 else
     echo ""
