@@ -23,11 +23,9 @@ Register layout (MMIO or PCI I/O BAR0):
 import asyncio
 import struct
 from dataclasses import dataclass, field
-from typing import Callable, Awaitable
 
 from kernel.bus.pci import PCIDevice, PCIDriver, config_read32
 from kernel.hal.io import mmio_read32, mmio_write32, mmio_read8
-from kernel.interrupts.router import interrupt
 import kernel.log as log
 
 # ── VirtIO constants ──────────────────────────────────────────────────────────
@@ -126,6 +124,8 @@ class Virtqueue:
         self._next_desc = 0
         self._avail_idx = 0
         self._last_used = 0
+        # Maps descriptor index → (physical_address, capacity) for RX buffers
+        self._desc_bufs: dict[int, tuple[int, int]] = {}
 
         # Compute sub-region offsets within the allocated memory
         desc_size  = n * 16
@@ -199,8 +199,6 @@ class VirtIONetDriver:
         self._txq: Virtqueue | None = None
         self._regs: VirtIORegs | None = None
         self._mac: bytes = bytes(6)
-        self._rx_handlers: list[Callable[[bytes], Awaitable[None]]] = []
-        self._rx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=256)
 
     def probe(self, dev: PCIDevice) -> bool:
         # BAR0 is an I/O port region
@@ -252,6 +250,7 @@ class VirtIONetDriver:
         for _ in range(self._rxq.n // 2):
             phys = _hal.dma_alloc(1526)   # max Ethernet frame + virtio header
             idx = self._rxq.alloc_desc()
+            self._rxq._desc_bufs[idx] = (phys, 1526)  # record for later read-back
             desc = VirtqDesc(
                 addr=phys,
                 length=1526,
@@ -289,27 +288,41 @@ class VirtIONetDriver:
         self._regs.set_queue_notify(1)   # kick TX queue
 
     async def recv(self) -> bytes:
-        """Wait for and return the next received Ethernet frame."""
-        return await self._rx_queue.get()
+        """Poll the VirtIO RX used ring for completed frames (no IRQ required)."""
+        while True:
+            if self._rxq and self._rxq.used_has_entries():
+                frame = self._rx_dequeue()
+                if frame is not None and len(frame) > VIRTIO_NET_HDR_SIZE:
+                    return frame[VIRTIO_NET_HDR_SIZE:]
+            await asyncio.sleep(0)
 
-    def handle_irq(self) -> None:
-        """Called by the PCI IRQ handler. Drains the used RX ring."""
-        if not self._rxq or not self._regs:
-            return
-        self._regs.isr_status   # clears interrupt
-        while self._rxq.used_has_entries():
-            desc_idx, length = self._rxq.used_pop()
-            # Read packet from descriptor buffer (skip virtio-net header)
-            # In a real impl: look up the buffer address from the desc table
-            # For now, signal that data is available
-            try:
-                self._rx_queue.put_nowait(b"")  # TODO: extract actual frame
-            except asyncio.QueueFull:
-                pass
-            # Re-add descriptor to available ring
-            self._rxq.avail_push(desc_idx)
+    def _rx_dequeue(self) -> bytes | None:
+        """Pull one entry from the used RX ring, read frame from DMA, resubmit descriptor."""
+        if not self._rxq:
+            return None
+        desc_idx, length = self._rxq.used_pop()
+        buf = self._rxq._desc_bufs.get(desc_idx)
+        if not buf:
+            return None
+        phys, cap = buf
+        actual = min(length, cap)
+        # Read frame from DMA buffer 4 bytes at a time (identity-mapped physical RAM)
+        data = bytearray(actual)
+        for i in range(0, actual, 4):
+            word = mmio_read32(phys + i)
+            chunk = min(4, actual - i)
+            for j in range(chunk):
+                data[i + j] = (word >> (j * 8)) & 0xFF
+        # Resubmit the descriptor so the NIC can reuse the buffer
+        self._rxq.avail_push(desc_idx)
         if self._regs:
             self._regs.set_queue_notify(0)
+        return bytes(data)
+
+    def handle_irq(self) -> None:
+        """Legacy IRQ entry point — clears ISR; polling mode handles the data."""
+        if self._regs:
+            self._regs.isr_status   # read to clear
 
     @property
     def mac(self) -> bytes:
