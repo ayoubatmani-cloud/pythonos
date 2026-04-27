@@ -8,6 +8,7 @@ early hardware init. From here, Python owns the machine.
 
 import asyncio
 
+import _hal
 import kernel.log as log
 from kernel.hal.io import set_interrupt_router
 from kernel.interrupts.router import router
@@ -18,6 +19,8 @@ from kernel.bus.pci import bus as pci_bus, PCIClass
 from kernel.scheduler import scheduler
 from kernel.fs.vfs import vfs
 from kernel.fs.tmpfs import TmpFS
+
+_ARCH = getattr(_hal, 'ARCH', 'x86_64')
 
 
 def boot(mmap: list[tuple[int, int]],
@@ -46,11 +49,15 @@ def boot(mmap: list[tuple[int, int]],
     log.info("kernel.boot: VMM ready")
 
     # ── PCI enumeration ────────────────────────────────────────────────────
-    log.info("kernel.boot: enumerating PCI bus...")
-    pci_bus.enumerate()
-    log.info(f"kernel.boot: {len(pci_bus)} PCI devices found")
-    for dev in pci_bus:
-        log.info(f"  {dev}")
+    # On arm64 QEMU virt we use VirtIO-MMIO for all devices; skip PCI scan.
+    if _ARCH == 'x86_64':
+        log.info("kernel.boot: enumerating PCI bus...")
+        pci_bus.enumerate()
+        log.info(f"kernel.boot: {len(pci_bus)} PCI devices found")
+        for dev in pci_bus:
+            log.info(f"  {dev}")
+    else:
+        log.info("kernel.boot: skipping PCI enumeration (arm64 VirtIO-MMIO)")
 
     # ── Filesystem ─────────────────────────────────────────────────────────
     root_fs = TmpFS()
@@ -102,16 +109,22 @@ async def _kernel_main(
         console = None
         log.info("kernel: no framebuffer — serial only")
 
-    # ── Keyboard ───────────────────────────────────────────────────────────
-    from kernel.drivers.keyboard import keyboard
-    keyboard.init()
-    log.info("kernel: keyboard driver ready")
+    # ── Keyboard / serial input ────────────────────────────────────────────
+    if _ARCH == 'x86_64':
+        from kernel.drivers.keyboard import keyboard
+        keyboard.init()
+        log.info("kernel: keyboard driver ready")
+    else:
+        from kernel.drivers.input import pl011
+        keyboard = pl011
+        log.info("kernel: PL011 serial input ready")
 
     # ── Register PCI drivers before binding ───────────────────────────────
     from kernel.drivers.net.virtio_net import VirtIONetDriver, VIRTIO_VENDOR, VIRTIO_NET_DEV
-    from kernel.sound.hda import HDADriver, HDA_VENDOR_INTEL, HDA_DEVICE_ICH6
     pci_bus.register_driver(VirtIONetDriver, vendor=VIRTIO_VENDOR, device=VIRTIO_NET_DEV)
-    pci_bus.register_driver(HDADriver, vendor=HDA_VENDOR_INTEL, device=HDA_DEVICE_ICH6)
+    if _ARCH == 'x86_64':
+        from kernel.sound.hda import HDADriver, HDA_VENDOR_INTEL, HDA_DEVICE_ICH6
+        pci_bus.register_driver(HDADriver, vendor=HDA_VENDOR_INTEL, device=HDA_DEVICE_ICH6)
 
     # ── PCI driver binding ─────────────────────────────────────────────────
     pci_bus.bind_drivers()
@@ -124,14 +137,27 @@ async def _kernel_main(
         scheduler.spawn(net_init(nic, "10.0.2.15", "10.0.2.2"), name="net-init")
         log.info("kernel: network stack starting")
 
-    # ── Sound ──────────────────────────────────────────────────────────────
-    import kernel.sound.hda
-    _hda_mod = _sys.modules['kernel.sound.hda']
-    hda_dev = next((dev.driver for dev in pci_bus
-                    if isinstance(getattr(dev, 'driver', None), _hda_mod.HDADriver)), None)
-    if hda_dev:
-        _hda_mod.hda = hda_dev
-        log.info("kernel: HDA sound ready")
+    # ── Sound (x86_64 only — Intel HDA is not present on arm64 virt) ──────
+    if _ARCH == 'x86_64':
+        import kernel.sound.hda
+        _hda_mod = _sys.modules['kernel.sound.hda']
+        hda_dev = next((dev.driver for dev in pci_bus
+                        if isinstance(getattr(dev, 'driver', None), _hda_mod.HDADriver)), None)
+        if hda_dev:
+            _hda_mod.hda = hda_dev
+            log.info("kernel: HDA sound ready")
+    else:
+        log.info("kernel: skipping HDA sound (arm64)")
+
+    # ── VirtIO-MMIO block device (arm64 only — x86 uses PCI VirtIO) ───────
+    if _ARCH == 'arm64':
+        from kernel.drivers.block import virtio_blk
+        _blk = virtio_blk.find_virtio_blk()
+        if _blk:
+            virtio_blk.blk = _blk
+            log.info(f"kernel: virtio-blk ready, {_blk.num_sectors} sectors")
+        else:
+            log.info("kernel: no virtio-blk device found")
 
     # ── Shell ──────────────────────────────────────────────────────────────
     from kernel.shell import Shell
@@ -143,10 +169,7 @@ async def _kernel_main(
             log._serial(text)
 
     shell = Shell(read_char=keyboard.read_char, write=_write)
-
-    # Spawn shell as a kernel process
     scheduler.spawn(shell.run(), name="kshell")
-
     log.info("kernel: shell spawned — system ready")
 
     # Main loop: keep the event loop alive; subsystems run as tasks

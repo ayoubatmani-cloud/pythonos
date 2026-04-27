@@ -13,7 +13,9 @@
 volatile uint64_t _pit_ticks = 0;
 #define TICK_HZ 100
 
+#ifndef ARCH_ARM64
 void pit_tick(void) { _pit_ticks++; }
+#endif
 
 // ── time_t / gettimeofday ─────────────────────────────────────────────────────
 

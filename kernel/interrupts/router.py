@@ -84,6 +84,8 @@ class InterruptRouter:
         if asyncio.iscoroutine(result):
             if self._loop and self._loop.is_running():
                 asyncio.ensure_future(result, loop=self._loop)
+            else:
+                result.close()   # event loop not yet running; discard tick
 
     @staticmethod
     def _unhandled(ctx: InterruptContext) -> None:

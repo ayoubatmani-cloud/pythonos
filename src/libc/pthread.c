@@ -155,7 +155,11 @@ void pthread_testcancel(void)                    { }
 
 void pthread_exit(void *retval) {
     (void)retval;
-    // Single-core bare-metal: thread exit halts the system
+    /* Single-core bare-metal: thread exit halts the system */
+#ifdef ARCH_ARM64
+    for (;;) __asm__ volatile ("wfe");
+#else
     __asm__ volatile ("cli");
     for (;;) __asm__ volatile ("hlt");
+#endif
 }

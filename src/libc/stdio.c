@@ -10,7 +10,12 @@
  */
 
 #include "include/libc.h"
+#ifndef ARCH_ARM64
 #include "../boot/io.h"
+#endif
+#ifdef ARCH_ARM64
+#include "../boot/io_arm64.h"
+#endif
 
 // ── errno ─────────────────────────────────────────────────────────────────────
 int errno = 0;
@@ -28,13 +33,19 @@ FILE *stderr = (FILE *)&_stderr_obj;
 FILE *stdin  = NULL;
 
 // ── Serial output ─────────────────────────────────────────────────────────────
+#ifndef ARCH_ARM64
 #define COM1_DATA 0x3F8
 #define COM1_LSR  (0x3F8 + 5)
+#endif
 
 static void serial_putc(char c) {
+#ifdef ARCH_ARM64
+    pl011_putc(c);
+#else
     while ((inb(COM1_LSR) & 0x20) == 0) {}
     if (c == '\n') { while ((inb(COM1_LSR) & 0x20) == 0) {} outb(COM1_DATA, '\r'); }
     outb(COM1_DATA, c);
+#endif
 }
 
 static void serial_write(const char *s, size_t n) {

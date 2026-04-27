@@ -6,15 +6,24 @@
  */
 
 #include "include/libc.h"
+#ifndef ARCH_ARM64
 #include "../boot/io.h"
+#endif
+#ifdef ARCH_ARM64
+#include "../boot/io_arm64.h"
+#endif
 #include <stdint.h>
 
 // ── Process ───────────────────────────────────────────────────────────────────
 
 void abort(void) {
     // Disable interrupts and halt — this is a kernel panic path
+#ifdef ARCH_ARM64
+    for (;;) __asm__ volatile ("wfe");
+#else
     __asm__ volatile ("cli");
     for (;;) __asm__ volatile ("hlt");
+#endif
 }
 
 void exit(int code) {
@@ -107,9 +116,13 @@ long write(int fd, const void *buf, size_t n) {
     if (fd == 1 || fd == 2) {
         const char *p = buf;
         for (size_t i = 0; i < n; i++) {
+#ifdef ARCH_ARM64
+            pl011_putc(p[i]);
+#else
             while ((inb(0x3F8 + 5) & 0x20) == 0) {}
             if (p[i] == '\n') { while ((inb(0x3F8 + 5) & 0x20) == 0) {} outb(0x3F8, '\r'); }
             outb(0x3F8, p[i]);
+#endif
         }
         return (long)n;
     }
@@ -226,6 +239,43 @@ char *nl_langinfo(nl_item item) {
     return "";  /* bare-metal: everything is "C" locale */
 }
 
+// ── User/password database (bare-metal stubs) ────────────────────────────────
+
+#include <pwd.h>
+
+struct passwd *getpwuid(unsigned int uid)          { (void)uid;  return NULL; }
+struct passwd *getpwnam(const char *name)          { (void)name; return NULL; }
+int getpwuid_r(unsigned int uid, struct passwd *pw, char *buf, size_t n, struct passwd **res) {
+    (void)uid; (void)pw; (void)buf; (void)n; if(res)*res=NULL; return ENOENT;
+}
+int getpwnam_r(const char *nm, struct passwd *pw, char *buf, size_t n, struct passwd **res) {
+    (void)nm; (void)pw; (void)buf; (void)n; if(res)*res=NULL; return ENOENT;
+}
+struct passwd *getpwent(void) { return NULL; }
+void setpwent(void) {}
+void endpwent(void) {}
+
+// ── Directory operations (bare-metal stubs) ───────────────────────────────────
+
+#include <dirent.h>
+#include <utime.h>
+#include <sys/times.h>
+
+DIR *opendir(const char *name)          { (void)name; errno = ENOSYS; return NULL; }
+DIR *fdopendir(int fd)                  { (void)fd;   errno = ENOSYS; return NULL; }
+struct dirent *readdir(DIR *d)          { (void)d;    return NULL; }
+int   closedir(DIR *d)                  { (void)d;    return 0; }
+void  rewinddir(DIR *d)                 { (void)d; }
+
+int utime(const char *path, const struct utimbuf *times) {
+    (void)path; (void)times; errno = ENOSYS; return -1;
+}
+
+clock_t times(struct tms *buf) {
+    if (buf) { buf->tms_utime = buf->tms_stime = buf->tms_cutime = buf->tms_cstime = 0; }
+    return (clock_t)-1;
+}
+
 // ── mkstemp ───────────────────────────────────────────────────────────────────
 
 int mkstemp(char *tmpl) { (void)tmpl; return -1; }
@@ -244,6 +294,17 @@ char *getcwd(char *buf, size_t size) {
     if (buf && size > 0) { buf[0] = '/'; buf[1] = '\0'; }
     return buf;
 }
+
+// environ: empty environment (bare metal has no env vars)
+char *_environ_empty = NULL;
+char **environ = &_environ_empty;
+
+int dup2(int oldfd, int newfd) { (void)oldfd; (void)newfd; errno = ENOSYS; return -1; }
+int unlink(const char *path) { (void)path; errno = ENOSYS; return -1; }
+int rename(const char *old, const char *new) { (void)old; (void)new; errno = ENOSYS; return -1; }
+int chdir(const char *path) { (void)path; errno = ENOSYS; return -1; }
+int rmdir(const char *path) { (void)path; errno = ENOSYS; return -1; }
+int mkdir(const char *path, unsigned int mode) { (void)path; (void)mode; errno = ENOSYS; return -1; }
 
 // ── stdio stubs not inlined by glibc in freestanding mode ────────────────────
 
@@ -325,3 +386,10 @@ int32_t **__ctype_tolower_loc(void) {
 // Real-time signal bounds: SIGRTMIN=34, SIGRTMAX=64 on Linux x86-64
 int __libc_current_sigrtmin(void) { return 34; }
 int __libc_current_sigrtmax(void) { return 64; }
+
+#ifdef ARCH_ARM64
+/* __getauxval — Linux auxiliary vector query. Used by libgcc lse-init.o to
+ * check if ARM Large System Extensions are available. On bare metal there's
+ * no kernel AUX vector; return 0 (feature absent). */
+unsigned long __getauxval(unsigned long type) { (void)type; return 0; }
+#endif

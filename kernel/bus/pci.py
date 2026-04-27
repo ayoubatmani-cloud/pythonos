@@ -17,9 +17,12 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Iterator, Protocol, runtime_checkable
 
+import _hal as _hal_mod
 from kernel.hal.io import inl, outl
 
 # ── PCI config space I/O ──────────────────────────────────────────────────────
+
+_ARCH = getattr(_hal_mod, 'ARCH', 'x86_64')
 
 CONFIG_ADDRESS = 0xCF8
 CONFIG_DATA    = 0xCFC
@@ -27,9 +30,20 @@ CONFIG_DATA    = 0xCFC
 def _addr(bus: int, dev: int, func: int, offset: int) -> int:
     return (1 << 31) | (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC)
 
-def config_read32(bus: int, dev: int, func: int, offset: int) -> int:
-    outl(CONFIG_ADDRESS, _addr(bus, dev, func, offset))
-    return inl(CONFIG_DATA)
+
+if _ARCH == 'arm64':
+    # PCIe ECAM (Enhanced Configuration Access Mechanism) on QEMU virt arm64.
+    # Config space at 0x4010000000; each function occupies 4KB.
+    _ECAM_BASE = 0x4010000000
+
+    def config_read32(bus: int, dev: int, func: int, offset: int) -> int:
+        addr = _ECAM_BASE | (bus << 20) | (dev << 15) | (func << 12) | (offset & 0xFFC)
+        return _hal_mod.mmio_read32(addr)
+else:
+    def config_read32(bus: int, dev: int, func: int, offset: int) -> int:
+        outl(CONFIG_ADDRESS, _addr(bus, dev, func, offset))
+        return inl(CONFIG_DATA)
+
 
 def config_read16(bus: int, dev: int, func: int, offset: int) -> int:
     raw = config_read32(bus, dev, func, offset)

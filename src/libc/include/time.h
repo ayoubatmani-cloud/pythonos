@@ -12,7 +12,10 @@ typedef int           clockid_t;   /* must match int (not long long) for pymacro
 #define __clockid_t_defined 1
 #endif
 
+#ifndef __timeval_defined
+# define __timeval_defined 1
 struct timeval  { time_t tv_sec; suseconds_t tv_usec; };
+#endif
 /* Set glibc guard so system bits/types/struct_timespec.h is skipped */
 #ifndef _STRUCT_TIMESPEC
 #define _STRUCT_TIMESPEC 1

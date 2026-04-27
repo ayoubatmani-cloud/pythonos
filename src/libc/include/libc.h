@@ -123,6 +123,10 @@ int ferror(FILE *f);
 
 // ── POSIX types ───────────────────────────────────────────────────────────────
 #include <sys/types.h>
+#include "dirent.h"
+#include "utime.h"
+#include "sys/times.h"
+#include "pwd.h"
 
 // ── Time ──────────────────────────────────────────────────────────────────────
 #include <time.h>
@@ -136,6 +140,13 @@ int    setenv(const char *name, const char *val, int overwrite);
 int    unsetenv(const char *name);
 int    getpid(void);
 int    getpagesize(void);
+int    dup2(int oldfd, int newfd);
+int    unlink(const char *path);
+int    rename(const char *old, const char *new);
+int    chdir(const char *path);
+int    rmdir(const char *path);
+int    mkdir(const char *path, unsigned int mode);
+extern char **environ;
 
 // ── Math (thin wrappers — uses libgcc where possible) ─────────────────────────
 double fabs(double x);

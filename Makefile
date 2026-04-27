@@ -3,15 +3,20 @@
 # All compilation happens inside Docker (cross-toolchain + python3.14 guaranteed).
 # QEMU runs on the host to boot the resulting ISO.
 #
-# Quick start:
-#   make          # build everything → pythonos.iso
-#   make run      # build + boot in QEMU (serial console)
+# First-time setup (takes ~10 min to cross-compile libpython):
+#   make
+#
+# Subsequent builds (fast — libpython is cached):
+#   make          # rebuild kernel + ISO if sources changed
+#   make run      # rebuild if needed, then boot in QEMU (serial console)
 #   make stop     # kill running QEMU instance
-#   make clean    # remove build artifacts
+#   make clean    # remove build artifacts (keeps libpython cache)
+#   make cleanall # remove everything including libpython
 
-ARCH      := x86_64
-ISO_OUT   := pythonos.iso
+ARCH       := x86_64
+ISO_OUT    := pythonos.iso
 DOCKER_IMG := pythonos-builder
+LIBPYTHON  := deps/cpython/libpython3.14.a
 
 QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
               -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
@@ -21,15 +26,11 @@ QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
 
 # ── User-facing targets ───────────────────────────────────────────────────────
 
-.PHONY: all run start stop restart test clean \
-        docker-build _iso _freeze
+.PHONY: all run start stop restart test clean cleanall docker-build \
+        _freeze _iso _libpython \
+        arm64 run-arm64 stop-arm64 _iso_arm64
 
 all: $(ISO_OUT)
-
-$(ISO_OUT): docker-build
-	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
-	  bash -c "./tools/setup_cpython.sh --build && make _freeze && make _iso"
-	@echo "ISO ready: $(ISO_OUT)"
 
 run: $(ISO_OUT)
 	qemu-system-$(ARCH) $(QEMU_FLAGS)
@@ -45,14 +46,41 @@ test:
 	@echo "No tests yet." && exit 0
 
 clean:
-	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf
+	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
+	       build-arm64 $(ARM64_ELF) \
+	       deps/cpython deps/cpython-src \
+	       deps-arm64/cpython deps-arm64/cpython-src \
+	       $(ARM64_DISK)
 
-# ── Docker image ─────────────────────────────────────────────────────────────
+cleanall: clean
+	rm -rf .docker-image deps/Python-*.tar.xz deps-arm64/Python-*.tar.xz
 
-docker-build:
+# ── Docker image (rebuild only when Dockerfile changes) ──────────────────────
+
+.docker-image: tools/Dockerfile
 	docker build --platform linux/amd64 --load -t $(DOCKER_IMG) -f tools/Dockerfile .
+	@touch $@
 
-# ── Internal targets — called from inside Docker, not by users ────────────────
+docker-build: .docker-image
+
+# ── CPython library (slow, cached — only rebuild if missing) ─────────────────
+
+$(LIBPYTHON): .docker-image
+	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	  bash -c "./tools/setup_cpython.sh --build"
+
+# ── Kernel ISO (fast — skips libpython rebuild) ──────────────────────────────
+
+KERNEL_SOURCES := $(shell find src kernel asyncio tools/stdlib_stubs \
+                      -name '*.py' -o -name '*.c' -o -name '*.h' -o -name '*.asm' \
+                      2>/dev/null)
+
+$(ISO_OUT): $(LIBPYTHON) $(KERNEL_SOURCES) .docker-image
+	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	  bash -c "make _freeze && make _iso"
+	@echo "ISO ready: $(ISO_OUT)"
+
+# ── Internal targets — called from inside Docker, not directly by users ───────
 
 TARGET  := $(ARCH)-elf
 CC      := $(TARGET)-gcc
@@ -164,3 +192,90 @@ $(KERNEL_ELF): $(BOOT_OBJS) $(HAL_OBJS) $(LIBC_OBJS) \
 _iso: $(KERNEL_ELF)
 	cp $(KERNEL_ELF) $(ISO_DIR)/boot/pythonos.elf
 	grub-mkrescue -o $(ISO_OUT) $(ISO_DIR)
+
+# ── arm64 build support ───────────────────────────────────────────────────────
+
+ARM64_ELF        := pythonos-arm64.elf
+LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
+
+QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 512M \
+                    -no-reboot -no-shutdown \
+                    -nographic -serial mon:stdio \
+                    -netdev user,id=net1 -device virtio-net-device,netdev=net1
+
+ARM64_DISK := disk-arm64.img
+
+# Build a 16 MiB raw disk image (FAT16 compatible) if it doesn't exist
+$(ARM64_DISK):
+	dd if=/dev/zero of=$@ bs=512 count=32768 2>/dev/null
+	@echo "Created blank disk image: $@"
+
+arm64: $(ARM64_ELF)
+
+# run-arm64: attach the disk image when present
+run-arm64: $(ARM64_ELF) $(ARM64_DISK)
+	qemu-system-aarch64 $(QEMU_ARM64_FLAGS) \
+	    -drive if=none,file=$(ARM64_DISK),format=raw,id=hd0 \
+	    -device virtio-blk-device,drive=hd0 \
+	    -kernel $(ARM64_ELF)
+
+stop-arm64:
+	@pkill -f "qemu-system-aarch64.*$(ARM64_ELF)" || echo "No arm64 QEMU running."
+
+$(LIBPYTHON_ARM64): .docker-image
+	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	  bash -c "./tools/setup_cpython.sh --arch=arm64 --build"
+
+$(ARM64_ELF): $(LIBPYTHON_ARM64) $(KERNEL_SOURCES) .docker-image
+	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	  bash -c "make _freeze && make _iso_arm64"
+	@echo "ARM64 ELF ready: $(ARM64_ELF)"
+
+# Internal: build arm64 ELF (called from inside Docker)
+TARGET_ARM64 := aarch64-elf
+CC_ARM64     := $(TARGET_ARM64)-gcc
+LD_ARM64     := $(TARGET_ARM64)-ld
+
+CFLAGS_ARM64 := -std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
+                -Wall -Wextra -DARCH_ARM64 -march=armv8-a \
+                -I src/libc/include \
+                -I deps-arm64/cpython/Include -I deps-arm64/cpython
+
+BUILD_ARM64 := build-arm64
+LIBGCC_ARM64 := $(shell $(CC_ARM64) -print-libgcc-file-name 2>/dev/null || echo "")
+
+BOOT_ARM64_S  := src/boot/boot_arm64.S
+BOOT_ARM64_C  := src/boot/main_arm64.c src/boot/fb.c src/boot/gic_arm64.c
+HAL_ARM64_C   := src/hal/hal.c
+LIBC_ARM64_C  := $(LIBC_C)
+
+BOOT_ARM64_OBJS := $(BUILD_ARM64)/boot/boot_arm64.S.o \
+                   $(patsubst src/%.c,$(BUILD_ARM64)/%.c.o,$(BOOT_ARM64_C))
+HAL_ARM64_OBJS  := $(BUILD_ARM64)/hal/hal.c.o
+LIBC_ARM64_OBJS := $(patsubst src/%.c,$(BUILD_ARM64)/%.c.o,$(LIBC_ARM64_C))
+
+$(BUILD_ARM64)/boot/boot_arm64.S.o: src/boot/boot_arm64.S
+	@mkdir -p $(dir $@)
+	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
+
+$(BUILD_ARM64)/boot/%.c.o: src/boot/%.c
+	@mkdir -p $(dir $@)
+	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
+
+$(BUILD_ARM64)/hal/%.c.o: src/hal/%.c
+	@mkdir -p $(dir $@)
+	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
+
+$(BUILD_ARM64)/libc/%.c.o: src/libc/%.c
+	@mkdir -p $(dir $@)
+	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
+
+$(BUILD_ARM64)/frozen_kernel.o: $(BUILD)/frozen_kernel.c
+	@mkdir -p $(BUILD_ARM64)
+	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
+
+_iso_arm64: $(BOOT_ARM64_OBJS) $(HAL_ARM64_OBJS) $(LIBC_ARM64_OBJS) \
+            $(BUILD_ARM64)/frozen_kernel.o deps-arm64/cpython/libpython3.14.a
+	@mkdir -p $(BUILD_ARM64)
+	$(LD_ARM64) -T linker_arm64.ld -nostdlib -o $(ARM64_ELF) $^ $(LIBGCC_ARM64)
+	@echo "ARM64 ELF: $(ARM64_ELF)"

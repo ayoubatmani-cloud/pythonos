@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-x86-64-linux-gnu \
     binutils-x86-64-linux-gnu \
+    gcc-aarch64-linux-gnu \
+    binutils-aarch64-linux-gnu \
+    libc6-dev-arm64-cross \
+    linux-libc-dev-arm64-cross \
     nasm \
     grub-pc-bin \
     grub-common \
@@ -26,5 +30,12 @@ RUN ln -s /usr/bin/x86_64-linux-gnu-gcc     /usr/local/bin/x86_64-elf-gcc     &&
     ln -s /usr/bin/x86_64-linux-gnu-objcopy /usr/local/bin/x86_64-elf-objcopy && \
     ln -s /usr/bin/x86_64-linux-gnu-ar      /usr/local/bin/x86_64-elf-ar      && \
     ln -s /usr/bin/x86_64-linux-gnu-ranlib  /usr/local/bin/x86_64-elf-ranlib
+
+# arm64 cross-compiler shims — Makefile uses aarch64-elf-* names.
+RUN ln -s /usr/bin/aarch64-linux-gnu-gcc     /usr/local/bin/aarch64-elf-gcc     && \
+    ln -s /usr/bin/aarch64-linux-gnu-ld      /usr/local/bin/aarch64-elf-ld      && \
+    ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-elf-objcopy && \
+    ln -s /usr/bin/aarch64-linux-gnu-ar      /usr/local/bin/aarch64-elf-ar      && \
+    ln -s /usr/bin/aarch64-linux-gnu-ranlib  /usr/local/bin/aarch64-elf-ranlib
 
 WORKDIR /work

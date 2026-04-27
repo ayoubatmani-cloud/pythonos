@@ -29,31 +29,70 @@ CPYTHON_URL="https://www.python.org/ftp/python/${CPYTHON_VERSION}/Python-${CPYTH
 CPYTHON_SHA256="d923c51303e38e249136fc1bdf3568d56ecb03214efdef48516176d3d7faaef8"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEPS_DIR="$REPO_ROOT/deps"
-CPYTHON_SRC="$DEPS_DIR/cpython-src"
-CROSS_PREFIX="x86_64-elf"
-CC="${CROSS_PREFIX}-gcc"
-AR="${CROSS_PREFIX}-ar"
-RANLIB="${CROSS_PREFIX}-ranlib"
 
-# Bare-metal CFLAGS for the actual library build (Phase 2).
-# NOT passed to configure — they would break configure's linker probes.
-#
-# NOTE: do NOT pass -mno-sse/-mno-sse2 here. Those flags are only for the
-#   kernel boot/ISR code (see BOOT_CFLAGS in Makefile). CPython must be
-#   able to generate SSE2 code since it runs with FPU state fully saved.
-# NOTE: do NOT define -D_GNU_SOURCE or -D_POSIX_C_SOURCE. Those feature-test
-#   macros cause system headers to transitively include bits/pthreadtypes.h
-#   which defines real Linux pthread struct layouts that conflict with our stubs.
-TARGET_CFLAGS="-std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
-  -mno-red-zone \
-  -I${REPO_ROOT}/src/libc/include \
-  -I${REPO_ROOT}/deps/cpython \
-  -DPy_BUILD_CORE=1 \
-  -DNDEBUG=1 \
-  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
+# ── Architecture selection ─────────────────────────────────────────────────────
+ARCH="x86_64"
+for arg in "$@"; do
+    case "$arg" in
+        --arch=arm64)  ARCH="arm64"  ;;
+        --arch=x86_64) ARCH="x86_64" ;;
+    esac
+done
 
-echo "==> PythonOS CPython bare-metal setup v${CPYTHON_VERSION}"
+if [[ "$ARCH" == "arm64" ]]; then
+    DEPS_DIR="$REPO_ROOT/deps-arm64"
+    CPYTHON_SRC="$DEPS_DIR/cpython-src"
+    CROSS_PREFIX="aarch64-elf"
+    CC="${CROSS_PREFIX}-gcc"
+    AR="${CROSS_PREFIX}-ar"
+    RANLIB="${CROSS_PREFIX}-ranlib"
+    # Bare-metal CFLAGS for AArch64.
+    # -ffixed-x18: reserve x18 as a platform register (mirrors macOS arm64 ABI).
+    # No -mno-red-zone: that flag is x86-only; AArch64 has no red zone.
+    # NOTE: do NOT define -D_GNU_SOURCE or -D_POSIX_C_SOURCE. Those feature-test
+    #   macros cause system headers to transitively include bits/pthreadtypes.h
+    #   which defines real Linux pthread struct layouts that conflict with our stubs.
+    TARGET_CFLAGS="-std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
+      -ffixed-x18 \
+      -march=armv8-a \
+      -I${REPO_ROOT}/src/libc/include \
+      -I${REPO_ROOT}/deps-arm64/cpython \
+      -DARCH_ARM64=1 \
+      -DPy_BUILD_CORE=1 \
+      -DNDEBUG=1 \
+      -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
+    # Configure with the HOST compiler (x86_64 gcc) just to generate the Makefile.
+    # The actual compile in Phase 2 overrides CC=aarch64-elf-gcc, identical to how
+    # the x86_64 build works. No --host flag — avoid cross-compile mode in configure
+    # since we can't link arm64 test programs on the build host.
+    CONFIGURE_EXTRA=""
+else
+    DEPS_DIR="$REPO_ROOT/deps"
+    CPYTHON_SRC="$DEPS_DIR/cpython-src"
+    CROSS_PREFIX="x86_64-elf"
+    CC="${CROSS_PREFIX}-gcc"
+    AR="${CROSS_PREFIX}-ar"
+    RANLIB="${CROSS_PREFIX}-ranlib"
+    # Bare-metal CFLAGS for the actual library build (Phase 2).
+    # NOT passed to configure — they would break configure's linker probes.
+    #
+    # NOTE: do NOT pass -mno-sse/-mno-sse2 here. Those flags are only for the
+    #   kernel boot/ISR code (see BOOT_CFLAGS in Makefile). CPython must be
+    #   able to generate SSE2 code since it runs with FPU state fully saved.
+    # NOTE: do NOT define -D_GNU_SOURCE or -D_POSIX_C_SOURCE. Those feature-test
+    #   macros cause system headers to transitively include bits/pthreadtypes.h
+    #   which defines real Linux pthread struct layouts that conflict with our stubs.
+    TARGET_CFLAGS="-std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
+      -mno-red-zone \
+      -I${REPO_ROOT}/src/libc/include \
+      -I${REPO_ROOT}/deps/cpython \
+      -DPy_BUILD_CORE=1 \
+      -DNDEBUG=1 \
+      -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
+    CONFIGURE_EXTRA=""
+fi
+
+echo "==> PythonOS CPython bare-metal setup v${CPYTHON_VERSION} [arch=${ARCH}]"
 
 # ── 1. Download ──────────────────────────────────────────────────────────────
 mkdir -p "$DEPS_DIR"
@@ -114,6 +153,7 @@ fi
 # pyconfig.h.in during the configure run).
 
 echo "==> Phase 1: Configuring CPython with host compiler..."
+# shellcheck disable=SC2086
 ./configure \
     --without-pydebug \
     --disable-shared \
@@ -123,6 +163,7 @@ echo "==> Phase 1: Configuring CPython with host compiler..."
     --without-dtrace \
     --without-c-locale-coercion \
     --with-computed-gotos \
+    $CONFIGURE_EXTRA \
     ac_cv_file__dev_ptmx=no \
     ac_cv_file__dev_null=no \
     ac_cv_header_netinet_in_h=no \
@@ -143,10 +184,19 @@ echo "==> Configuration complete. Log: $DEPS_DIR/configure.log"
 # pyconfig.h.in. Our version overrides the host-detected values with the
 # bare-metal subset our libc actually provides.
 echo "==> Installing bare-metal pyconfig.h..."
-cp "$REPO_ROOT/deps/pyconfig.h" "$CPYTHON_SRC/pyconfig.h"
+if [[ "$ARCH" == "arm64" ]]; then
+    cp "$REPO_ROOT/deps/pyconfig_arm64.h" "$CPYTHON_SRC/pyconfig.h"
+else
+    cp "$REPO_ROOT/deps/pyconfig.h" "$CPYTHON_SRC/pyconfig.h"
+fi
 
 echo "==> Installing Modules/Setup.local..."
 cp "$REPO_ROOT/deps/Modules.Setup.local" "$CPYTHON_SRC/Modules/Setup.local"
+
+# For arm64 builds, update the hal path in Setup.local to reference the arm64 deps dir
+if [[ "$ARCH" == "arm64" ]]; then
+    sed -i 's|../../deps/cpython|../../deps-arm64/cpython|g' "$CPYTHON_SRC/Modules/Setup.local" 2>/dev/null || true
+fi
 
 # ── 5b. Post-configure Makefile patches ──────────────────────────────────────
 # Patch the configure-generated Makefile to work with our bare-metal build:
@@ -194,43 +244,50 @@ sed -i \
     "$CPYTHON_SRC/Makefile"
 # Neuter PIE-incompatible binary targets: _freeze_module and _bootstrap_python.
 # Both link libpython with -fno-pie which fails Ubuntu 24.04's PIE-only linker.
-# Replace their link recipes with no-ops; frozen modules use python3 script.
-python3 - "$CPYTHON_SRC/Makefile" <<'PYEOF'
-import sys, re
-path = sys.argv[1]
-text = open(path).read()
-# Neuter Programs/_freeze_module link rule
-text = re.sub(
-    r'Programs/_freeze_module: Programs/_freeze_module\.o[^\n]*\n'
-    r'\t\$\(LINKCC\)[^\n]*\n',
-    'Programs/_freeze_module: Programs/_freeze_module.py\n'
-    '\t@echo "PythonOS: skipping _freeze_module binary (using python3 script)"\n',
-    text
-)
-# Neuter _bootstrap_python link rule (multi-line: two recipe lines)
-text = re.sub(
-    r'_bootstrap_python: [^\n]*\n'
-    r'\t\$\(LINKCC\)[^\n]*\\\n'
-    r'\t\t[^\n]*\n',
-    '_bootstrap_python: Programs/_freeze_module.py\n'
-    '\t@echo "PythonOS: skipping _bootstrap_python binary (using system python3)"\n'
-    '\t@touch _bootstrap_python\n',
-    text
-)
-open(path, 'w').write(text)
-PYEOF
+# Replace their link recipes with no-ops; frozen module headers are pre-generated
+# via python3.14 Programs/_freeze_module.py in step 5c below.
+#
+# _freeze_module's link recipe uniquely contains 'getpath_noop.o'.
+# _bootstrap_python's link recipe uniquely contains '_bootstrap_python.o'.
+sed -i \
+    -e 's|^\t\$(LINKCC).*getpath_noop.*$|\t@echo "PythonOS: skipping _freeze_module link"|' \
+    -e 's|^\t\$(LINKCC).*_bootstrap_python\.o.*$|\t@echo "PythonOS: skipping _bootstrap_python link"|' \
+    -e 's|^\t\t.*LIBRARY_OBJS_OMIT_FROZEN.*$|\t@true|' \
+    "$CPYTHON_SRC/Makefile"
+# Also neuter the _bootstrap_python dependency line so make doesn't re-enter the rule
+sed -i \
+    -e 's|^_bootstrap_python: .*$|_bootstrap_python: Programs/_freeze_module.py|' \
+    -e 's|^Programs/_freeze_module: Programs/_freeze_module\.o.*$|Programs/_freeze_module: Programs/_freeze_module.py|' \
+    "$CPYTHON_SRC/Makefile"
+echo "==> Neutered _freeze_module and _bootstrap_python build rules"
+# Neuter the Makefile self-regeneration rule.
+# When 'make libpython3.14.a' runs, make sees Setup.local (installed after
+# configure) is newer than Makefile and re-runs 'make -f Makefile.pre', which
+# regenerates Makefile from scratch and overwrites all of our patches above.
+# Replace the regeneration recipe with a no-op to prevent this.
+sed -i \
+    -e 's|^\t\$(MAKESETUP) -c .*$|\t@echo "PythonOS: skipping Makefile regen (patches preserved)"|' \
+    -e '/^\t\t\t\t\(-s Modules\|Modules\/Setup\)/d' \
+    -e 's|^\t@mv config\.c Modules.*$|\t@true|' \
+    -e '/^\t@echo "The Makefile was updated/d' \
+    "$CPYTHON_SRC/Makefile"
+echo "==> Neutered Makefile self-regeneration rule"
 # Regenerate Modules/config.c from our custom Setup.local so that make
 # does not try to regenerate it (and lose our Makefile patches).
 # We discard the Makefile fragment output and only keep config.c.
 echo "==> Regenerating Modules/config.c from our Setup.local..."
-"$CPYTHON_SRC/Misc/makesetup" \
-    -c "$CPYTHON_SRC/Modules/config.c.in" \
-    -s "$CPYTHON_SRC/Modules" \
-    "$CPYTHON_SRC/Modules/Setup.local" \
-    "$CPYTHON_SRC/Modules/Setup.stdlib" \
-    "$CPYTHON_SRC/Modules/Setup.bootstrap" \
-    "$CPYTHON_SRC/Modules/Setup" \
-    > /dev/null 2>&1 || true
+# In CPython 3.14+, makesetup moved from Misc/ to Modules/.
+# It writes config.c to the current directory; the Makefile then does 'mv config.c Modules'.
+# Run from CPYTHON_SRC so relative paths (-s Modules, Setup.local etc.) resolve correctly.
+(cd "$CPYTHON_SRC" && \
+ Modules/makesetup \
+    -c Modules/config.c.in \
+    -s Modules \
+    Modules/Setup.local \
+    Modules/Setup.stdlib \
+    Modules/Setup.bootstrap \
+    Modules/Setup \
+    > /dev/null 2>&1 && mv config.c Modules/ ) || echo "WARN: makesetup failed — config.c may be incomplete"
 
 # Touch Makefile AND config.c AFTER patching so make does not re-generate
 # them when it sees Setup.local is newer (autoconf self-regen rule).
@@ -258,6 +315,7 @@ mkdir -p Python/frozen_modules
 # Always regenerate all frozen module headers — tarball timestamps cannot be
 # trusted and using the wrong Python version silently corrupts the bytecode.
 grep -A1 'frozen_modules/.*\.h:' Makefile \
+    | grep $'^\t' \
     | grep 'FREEZE_MODULE' \
     | sed 's/.*BOOTSTRAP) //' \
     | sed 's/.*FREEZE_MODULE) //' \
@@ -274,8 +332,9 @@ grep -A1 'frozen_modules/.*\.h:' Makefile \
 touch Python/frozen_modules/*.h 2>/dev/null || true
 
 # ── 6. Optionally build (Phase 2) ─────────────────────────────────────────────
-if [[ "${1:-}" == "--build" ]]; then
+if [[ "${1:-}" == "--build" ]] || [[ "${2:-}" == "--build" ]]; then
     echo "==> Phase 2: Building libpython3.14.a with cross-compiler..."
+    echo "    ARCH=$ARCH"
     echo "    CC=$CC"
     echo "    CFLAGS=$TARGET_CFLAGS"
 
@@ -285,7 +344,25 @@ if [[ "${1:-}" == "--build" ]]; then
     find "$CPYTHON_SRC" -name '*.o' -delete 2>/dev/null || true
     rm -f "$CPYTHON_SRC/libpython3.14.a"
 
+    # Pass FREEZE_MODULE overrides on the command line — these survive any
+    # Makefile self-regeneration. The Docker/macOS volume mount resolves
+    # timestamps to 1-second granularity inside the container; touch Makefile
+    # and Setup.local may land in the same second, causing make's self-regen
+    # rule to fire and regenerate Makefile from Makefile.pre. Even if it does,
+    # command-line variable assignments always override Makefile definitions:
+    #   FREEZE_MODULE_BOOTSTRAP_DEPS — change from binary to .py script
+    #   FREEZE_MODULE_DEPS           — remove _bootstrap_python, use .py only
+    #   FREEZE_MODULE_BOOTSTRAP      — use python3.14 to run .py directly
+    #   PYTHON_FOR_FREEZE            — use python3.14 for non-bootstrap freeze
+    # -W Makefile -W Modules/config.c: additionally tell make both are up-to-date
+    # so the self-regen recipe is skipped if possible.
     make -j"$(nproc)" libpython3.14.a \
+        -W Makefile \
+        -W Modules/config.c \
+        'FREEZE_MODULE_BOOTSTRAP=python3.14 ./Programs/_freeze_module.py' \
+        'FREEZE_MODULE_BOOTSTRAP_DEPS=Programs/_freeze_module.py' \
+        'FREEZE_MODULE_DEPS=$(srcdir)/Programs/_freeze_module.py' \
+        'PYTHON_FOR_FREEZE=python3.14' \
         CC="$CC" \
         AR="$AR" \
         RANLIB="$RANLIB" \
@@ -297,11 +374,15 @@ if [[ "${1:-}" == "--build" ]]; then
     mkdir -p "$DEPS_DIR/cpython/Include"
     cp libpython3.14.a "$DEPS_DIR/cpython/libpython3.14.a"
     cp -r Include/. "$DEPS_DIR/cpython/Include/"
-    cp "$REPO_ROOT/deps/pyconfig.h" "$DEPS_DIR/cpython/pyconfig.h"
+    if [[ "$ARCH" == "arm64" ]]; then
+        cp "$REPO_ROOT/deps/pyconfig_arm64.h" "$DEPS_DIR/cpython/pyconfig.h"
+    else
+        cp "$REPO_ROOT/deps/pyconfig.h" "$DEPS_DIR/cpython/pyconfig.h"
+    fi
     echo "==> Done. Library: $DEPS_DIR/cpython/libpython3.14.a"
 else
     echo ""
-    echo "Next: ./tools/setup_cpython.sh --build"
+    echo "Next: ./tools/setup_cpython.sh [--arch=arm64] --build"
     echo "  or: cd $CPYTHON_SRC && make -j\$(nproc) libpython3.14.a CC=$CC CFLAGS=..."
 fi
 
