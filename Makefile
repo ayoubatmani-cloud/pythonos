@@ -10,8 +10,20 @@
 ARCH       := x86_64
 TARGET     := $(ARCH)-elf
 
-CC         := $(TARGET)-gcc
-LD         := $(TARGET)-ld
+# Prefer the bare-metal cross-compiler (x86_64-elf-*); fall back to the
+# Linux-hosted equivalent (x86_64-linux-gnu-*) when running on x86_64 Linux
+# without the Docker toolchain aliases installed.
+ifneq ($(shell which $(TARGET)-gcc 2>/dev/null),)
+  CC := $(TARGET)-gcc
+  LD := $(TARGET)-ld
+else ifneq ($(shell which $(ARCH)-linux-gnu-gcc 2>/dev/null),)
+  CC := $(ARCH)-linux-gnu-gcc
+  LD := $(ARCH)-linux-gnu-ld
+else
+  CC := gcc
+  LD := ld
+endif
+
 AS         := nasm
 
 # CPython source dir — populated by: make cpython-build
