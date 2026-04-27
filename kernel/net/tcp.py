@@ -1,0 +1,196 @@
+"""
+kernel.net.tcp — Minimal TCP stack.
+
+Implements the state machine, connection management, and stream I/O.
+Does not yet implement: congestion control, SACK, timestamps, window scaling.
+Think of this as TCP Reno circa 1988 — correct, not fast.
+
+Usage:
+    conn = await tcp.connect("93.184.216.34", 80)
+    await conn.send(b"GET / HTTP/1.0\r\n\r\n")
+    data = await conn.recv(4096)
+    conn.close()
+"""
+
+
+import asyncio
+import struct
+import random
+from dataclasses import dataclass, field
+from enum import IntEnum
+
+from kernel.net.ip import IPv4Packet, inet_cksum, PROTO_TCP, ip_str, ip_from_str
+from kernel.net.ethernet import EtherFrame, ETHERTYPE_IPv4
+import kernel.log as log
+
+
+class TCPState(IntEnum):
+    CLOSED      = 0
+    LISTEN      = 1
+    SYN_SENT    = 2
+    SYN_RCVD    = 3
+    ESTABLISHED = 4
+    FIN_WAIT_1  = 5
+    FIN_WAIT_2  = 6
+    CLOSE_WAIT  = 7
+    CLOSING     = 8
+    LAST_ACK    = 9
+    TIME_WAIT   = 10
+
+# TCP flag bits
+F_FIN = 0x01
+F_SYN = 0x02
+F_RST = 0x04
+F_PSH = 0x08
+F_ACK = 0x10
+F_URG = 0x20
+
+
+@dataclass
+class TCPSegment:
+    src_port:  int
+    dst_port:  int
+    seq:       int
+    ack:       int
+    flags:     int
+    window:    int
+    payload:   bytes
+
+    @classmethod
+    def decode(cls, raw: bytes, src_ip: bytes, dst_ip: bytes) -> "TCPSegment | None":
+        if len(raw) < 20:
+            return None
+        src_p, dst_p = struct.unpack(">HH", raw[0:4])
+        seq, ack     = struct.unpack(">II", raw[4:12])
+        off_flags    = struct.unpack(">H", raw[12:14])[0]
+        flags        = off_flags & 0x1FF
+        offset       = (off_flags >> 12) * 4
+        window       = struct.unpack(">H", raw[14:16])[0]
+        return cls(src_port=src_p, dst_port=dst_p, seq=seq, ack=ack,
+                   flags=flags, window=window, payload=raw[offset:])
+
+    def encode(self, src_ip: bytes, dst_ip: bytes) -> bytes:
+        pseudo = src_ip + dst_ip + struct.pack(">BBI", 0, PROTO_TCP, 20 + len(self.payload))
+        header = struct.pack(">HHIIHHHHH",
+            self.src_port, self.dst_port,
+            self.seq, self.ack,
+            (5 << 12) | self.flags,  # data offset = 5 (20 bytes), flags
+            self.window,
+            0,        # checksum placeholder
+            0, 0,     # urgent pointer, padding
+        )[:20]
+        cksum = inet_cksum(pseudo + header + self.payload)
+        return header[:16] + struct.pack(">H", cksum) + header[18:] + self.payload
+
+
+@dataclass
+class TCPConnection:
+    local_ip:   bytes
+    remote_ip:  bytes
+    local_port: int
+    remote_port: int
+    state:      TCPState = TCPState.CLOSED
+    snd_seq:    int = field(default_factory=lambda: random.randint(0, 2**32 - 1))
+    snd_ack:    int = 0
+    snd_wnd:    int = 65535
+    rcv_buf:    bytearray = field(default_factory=bytearray)
+    _rx_event:  asyncio.Event = field(default_factory=asyncio.Event)
+    _connected: asyncio.Future | None = None
+
+    async def send_segment(self, flags: int, payload: bytes = b"") -> None:
+        seg = TCPSegment(
+            src_port=self.local_port,
+            dst_port=self.remote_port,
+            seq=self.snd_seq,
+            ack=self.snd_ack,
+            flags=flags,
+            window=self.snd_wnd,
+            payload=payload,
+        )
+        from kernel.net import stack
+        await stack.send_tcp_segment(seg, self.local_ip, self.remote_ip)
+        if payload or (flags & (F_SYN | F_FIN)):
+            self.snd_seq = (self.snd_seq + max(len(payload), 1)) & 0xFFFFFFFF
+
+    async def recv(self, n: int = 4096) -> bytes:
+        while not self.rcv_buf:
+            self._rx_event.clear()
+            await self._rx_event.wait()
+        data = bytes(self.rcv_buf[:n])
+        del self.rcv_buf[:n]
+        return data
+
+    async def send(self, data: bytes) -> None:
+        await self.send_segment(F_ACK | F_PSH, data)
+
+    def close(self) -> None:
+        if self.state == TCPState.ESTABLISHED:
+            asyncio.ensure_future(self.send_segment(F_FIN | F_ACK))
+            self.state = TCPState.FIN_WAIT_1
+
+    def handle_segment(self, seg: TCPSegment) -> None:
+        if self.state == TCPState.SYN_SENT:
+            if seg.flags & F_SYN and seg.flags & F_ACK:
+                self.snd_ack = (seg.seq + 1) & 0xFFFFFFFF
+                asyncio.ensure_future(self.send_segment(F_ACK))
+                self.state = TCPState.ESTABLISHED
+                if self._connected and not self._connected.done():
+                    self._connected.set_result(self)
+            elif seg.flags & F_RST:
+                self.state = TCPState.CLOSED
+                if self._connected and not self._connected.done():
+                    self._connected.set_exception(ConnectionRefusedError())
+        elif self.state == TCPState.ESTABLISHED:
+            if seg.payload:
+                self.snd_ack = (seg.seq + len(seg.payload)) & 0xFFFFFFFF
+                self.rcv_buf.extend(seg.payload)
+                self._rx_event.set()
+                asyncio.ensure_future(self.send_segment(F_ACK))
+            if seg.flags & F_FIN:
+                self.snd_ack = (seg.seq + 1) & 0xFFFFFFFF
+                asyncio.ensure_future(self.send_segment(F_ACK))
+                self.state = TCPState.CLOSE_WAIT
+
+
+class TCPStack:
+    def __init__(self) -> None:
+        self._connections: dict[tuple, TCPConnection] = {}
+        self._next_port   = 49152   # ephemeral range
+
+    def _alloc_port(self) -> int:
+        port = self._next_port
+        self._next_port = (self._next_port + 1 - 49152) % 16384 + 49152
+        return port
+
+    async def connect(self, remote_ip_str: str, remote_port: int,
+                      local_ip: bytes = bytes(4)) -> TCPConnection:
+        remote_ip   = ip_from_str(remote_ip_str)
+        local_port  = self._alloc_port()
+        conn = TCPConnection(
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            local_port=local_port,
+            remote_port=remote_port,
+            state=TCPState.SYN_SENT,
+        )
+        conn._connected = asyncio.get_event_loop().create_future()
+        key = (local_ip, local_port, remote_ip, remote_port)
+        self._connections[key] = conn
+
+        await conn.send_segment(F_SYN)
+        await asyncio.wait_for(conn._connected, timeout=10.0)
+        return conn
+
+    def handle_ip_packet(self, pkt: IPv4Packet) -> None:
+        if pkt.proto != PROTO_TCP:
+            return
+        seg = TCPSegment.decode(pkt.payload, pkt.src, pkt.dst)
+        if not seg:
+            return
+        key = (pkt.dst, seg.dst_port, pkt.src, seg.src_port)
+        conn = self._connections.get(key)
+        if conn:
+            conn.handle_segment(seg)
+
+# Module-level singleton
+tcp = TCPStack()

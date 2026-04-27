@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+pythonos.iso
+iso/boot/pythonos.elf
+src/hal/hal.o
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temp files
+*.tmp
+
+# CPython dependency tree (large; rebuild with make cpython-build)
+deps/cpython/
+deps/cpython-src/
+deps/Python-3.13.0.tar.xz
+deps/build.log
+deps/configure.log
+
+# macOS
+.DS_Store

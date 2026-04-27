@@ -1,0 +1,186 @@
+"""
+kernel.fs.vfs — Virtual Filesystem Switch.
+
+All filesystem access goes through here. Concrete filesystems
+(tmpfs, ext2, etc.) register as mounts at a path prefix.
+
+The VFS presents a uniform Protocol:
+  open / read / write / seek / close / stat
+  mkdir / rmdir / readdir / unlink / rename
+
+File descriptors are integers (like POSIX). The fd table lives here.
+"""
+
+
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from enum import IntFlag, IntEnum
+from pathlib import PurePosixPath
+from typing import AsyncIterator, Protocol, runtime_checkable
+
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+class OpenFlags(IntFlag):
+    RDONLY  = 0
+    WRONLY  = 1
+    RDWR    = 2
+    CREAT   = 0x040
+    TRUNC   = 0x200
+    APPEND  = 0x400
+    NONBLOCK= 0x800
+
+class SeekWhence(IntEnum):
+    SET = 0   # from beginning
+    CUR = 1   # from current position
+    END = 2   # from end
+
+class InodeType(IntEnum):
+    FILE    = 0
+    DIR     = 1
+    SYMLINK = 2
+    DEVICE  = 3
+    PIPE    = 4
+
+
+# ── Filesystem Protocol ───────────────────────────────────────────────────────
+
+@dataclass(slots=True)
+class Stat:
+    inode_type: InodeType
+    size:       int
+    uid:        int = 0
+    gid:        int = 0
+    mode:       int = 0o644
+    nlink:      int = 1
+
+
+@runtime_checkable
+class FSNode(Protocol):
+    async def stat(self) -> Stat: ...
+    async def read(self, offset: int, n: int) -> bytes: ...
+    async def write(self, offset: int, data: bytes) -> int: ...
+    async def readdir(self) -> list[str]: ...
+    async def lookup(self, name: str) -> "FSNode": ...
+    async def create(self, name: str, inode_type: InodeType) -> "FSNode": ...
+    async def unlink(self, name: str) -> None: ...
+
+
+@runtime_checkable
+class Filesystem(Protocol):
+    def root(self) -> FSNode: ...
+
+
+# ── File descriptor table ─────────────────────────────────────────────────────
+
+@dataclass(slots=True)
+class FileDescription:
+    node:   FSNode
+    flags:  OpenFlags
+    offset: int = 0
+
+
+class VFS:
+    def __init__(self) -> None:
+        self._mounts: list[tuple[str, Filesystem]] = []   # sorted longest-first
+        self._fds:    dict[int, FileDescription]   = {}
+        self._next_fd = 3   # 0/1/2 reserved for stdin/stdout/stderr
+
+    # ── Mount / unmount ───────────────────────────────────────────────────────
+
+    def mount(self, path: str, fs: Filesystem) -> None:
+        self._mounts.append((path.rstrip("/") or "/", fs))
+        self._mounts.sort(key=lambda m: len(m[0]), reverse=True)
+
+    def unmount(self, path: str) -> None:
+        self._mounts = [(p, fs) for p, fs in self._mounts if p != path]
+
+    # ── Path resolution ───────────────────────────────────────────────────────
+
+    async def _resolve(self, path: str) -> FSNode:
+        pure = PurePosixPath(path)
+        # Find deepest mount point that is a prefix of path
+        for mount_path, fs in self._mounts:
+            mp = PurePosixPath(mount_path)
+            try:
+                rel = pure.relative_to(mp)
+            except ValueError:
+                continue
+            node = fs.root()
+            for part in rel.parts:
+                node = await node.lookup(part)
+            return node
+        raise FileNotFoundError(f"No filesystem mounted for {path!r}")
+
+    # ── fd operations ─────────────────────────────────────────────────────────
+
+    async def open(self, path: str, flags: OpenFlags = OpenFlags.RDONLY) -> int:
+        node = await self._resolve(path)
+        if flags & OpenFlags.TRUNC:
+            await node.write(0, b"")
+        fd = self._next_fd
+        self._next_fd += 1
+        self._fds[fd] = FileDescription(node=node, flags=flags)
+        return fd
+
+    async def read(self, fd: int, n: int) -> bytes:
+        desc = self._fds[fd]
+        data = await desc.node.read(desc.offset, n)
+        desc.offset += len(data)
+        return data
+
+    async def write(self, fd: int, data: bytes) -> int:
+        desc = self._fds[fd]
+        if desc.flags & OpenFlags.APPEND:
+            st = await desc.node.stat()
+            desc.offset = st.size
+        written = await desc.node.write(desc.offset, data)
+        desc.offset += written
+        return written
+
+    def seek(self, fd: int, offset: int, whence: SeekWhence = SeekWhence.SET) -> int:
+        desc = self._fds[fd]
+        if whence == SeekWhence.SET:
+            desc.offset = offset
+        elif whence == SeekWhence.CUR:
+            desc.offset += offset
+        elif whence == SeekWhence.END:
+            # Would need stat — skip for now
+            pass
+        return desc.offset
+
+    def close(self, fd: int) -> None:
+        self._fds.pop(fd, None)
+
+    async def stat(self, path: str) -> Stat:
+        node = await self._resolve(path)
+        return await node.stat()
+
+    async def mkdir(self, path: str) -> None:
+        parent_path = str(PurePosixPath(path).parent)
+        name        = PurePosixPath(path).name
+        parent      = await self._resolve(parent_path)
+        await parent.create(name, InodeType.DIR)
+
+    async def readdir(self, path: str) -> list[str]:
+        node = await self._resolve(path)
+        return await node.readdir()
+
+    async def unlink(self, path: str) -> None:
+        parent_path = str(PurePosixPath(path).parent)
+        name        = PurePosixPath(path).name
+        parent      = await self._resolve(parent_path)
+        await parent.unlink(name)
+
+    @asynccontextmanager
+    async def opened(self, path: str, flags: OpenFlags = OpenFlags.RDONLY) -> AsyncIterator[int]:
+        fd = await self.open(path, flags)
+        try:
+            yield fd
+        finally:
+            self.close(fd)
+
+
+# Module-level VFS singleton
+vfs = VFS()

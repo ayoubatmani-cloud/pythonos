@@ -1,0 +1,93 @@
+# PythonOS — CPython Modules/Setup.local
+#
+# Only modules that are safe on bare metal (no POSIX file I/O, no sockets).
+# Copy this file to <cpython-src>/Modules/Setup.local before building.
+#
+# Format: <module_name> <source_files...> [<compiler_flags>]
+# A '*' at the start of a section header means "always compile in".
+#
+# CPython 3.13 file naming notes:
+#   - _warnings: now in Python/_warnings.c (included via Python objects)
+#   - _string: now in Objects/unicodeobject.c (included via Object objects)
+#   - _csv: renamed from _csvmodule.c to _csv.c
+#   - sha256/sha512: merged into sha2module.c (_sha2), requires HACL lib
+#   - sha1/md5: now use HACL backends too
+
+*static*
+
+# ── Core — always required ──────────────────────────────────────────────────
+_collections _collectionsmodule.c
+_functools    _functoolsmodule.c
+_abc          _abc.c
+_weakref      _weakref.c
+# _weakrefset is pure Python — no C module; remove to avoid spurious PyInit ref
+_operator     _operator.c
+_stat         _stat.c
+_signal       signalmodule.c   # our stubs handle signal()
+# _warnings: code is in Python/_warnings.c — included via Python object list
+# _string: code is in Objects/unicodeobject.c — included via Object object list
+_io           _io/_iomodule.c _io/iobase.c _io/fileio.c \
+              _io/bufferedio.c _io/bytesio.c _io/stringio.c _io/textio.c
+itertools     itertoolsmodule.c
+time          timemodule.c    # uses our clock_gettime
+math          mathmodule.c    # uses libgcc for float ops
+_struct       _struct.c
+binascii      binascii.c
+_csv          _csv.c          # renamed from _csvmodule.c in CPython 3.13
+_json         _json.c
+_random       _randommodule.c
+_bisect       _bisectmodule.c
+_heapq        _heapqmodule.c
+_datetime     _datetimemodule.c
+# _decimal: uses embedded mpdecimal with hidden visibility symbols;
+#   skip for initial boot (decimal module falls back to pure Python)
+_pickle       _pickle.c
+
+# ── asyncio C accelerator ─────────────────────────────────────────────────
+_asyncio      _asynciomodule.c
+
+# ── Threading (GIL-protected, pthreads stubbed) ───────────────────────────
+_thread       _threadmodule.c
+
+# ── Codecs ───────────────────────────────────────────────────────────────
+_codecs       _codecsmodule.c
+_codecs_cn    cjkcodecs/_codecs_cn.c
+_codecs_hk    cjkcodecs/_codecs_hk.c
+_codecs_iso2022 cjkcodecs/_codecs_iso2022.c
+_codecs_jp    cjkcodecs/_codecs_jp.c
+_codecs_kr    cjkcodecs/_codecs_kr.c
+_codecs_tw    cjkcodecs/_codecs_tw.c
+_multibytecodec cjkcodecs/multibytecodec.c
+unicodedata   unicodedata.c
+
+# ── Hash / crypto ─────────────────────────────────────────────────────────
+# sha256/sha512 merged into _sha2 in CPython 3.13; _sha2 requires HACL
+# library (Modules/_hacl/) to be built first — skip for initial boot.
+# sha1 and md5 still have standalone modules in CPython 3.13:
+# _sha1 and _md5 excluded: sha1module.c/md5module.c use HACL crypto library
+# (python_hashlib_Hacl_Hash_SHA1_*/MD5_*) which we don't provide
+# _sha1         sha1module.c
+# _md5          md5module.c
+_blake2       _blake2/blake2module.c _blake2/blake2b_impl.c _blake2/blake2s_impl.c
+_hashlib      # skip — needs OpenSSL
+_ssl          # skip — needs OpenSSL
+
+# ── Platform-specific — EXCLUDE (no POSIX) ────────────────────────────────
+# _posixsubprocess  # no fork
+# select            # no select/poll
+# socket            # no networking yet
+# _socket           # no networking yet
+# fcntl             # no fcntl
+# termios           # no TTY
+# readline          # no readline
+# grp               # no groups
+# pwd               # no passwd
+# resource          # no getrlimit
+# syslog            # no syslog
+# nis               # no NIS
+# _ctypes           # could add later
+# _tkinter          # definitely not
+
+# ── Our custom kernel module ───────────────────────────────────────────────
+# Path is relative to Modules/ directory; ../../../ = project root from Modules/
+_hal          ../../../src/hal/hal.c
