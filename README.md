@@ -1,6 +1,6 @@
 # PythonOS
 
-A bare-metal operating system where CPython 3.14 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell.
+A bare-metal operating system where CPython 3.14 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell. Runs on x86_64 and arm64 (QEMU `virt`).
 
 ## Quick Start
 
@@ -10,63 +10,74 @@ A bare-metal operating system where CPython 3.14 **is** the kernel — not a pro
 - QEMU (`brew install qemu` on macOS)
 - CPython 3.14 source tree (fetched by the build)
 
-### Build
+### First-time build (~10 min to cross-compile CPython)
 
 ```bash
-# First time: fetch and cross-compile CPython for bare metal (~10 min)
-make docker-build       # build the Docker cross-compilation image
-make cpython-build      # build libpython3.14.a inside Docker
+make docker-build   # build the Docker cross-compilation image once
+make                # cross-compile libpython + kernel, produce pythonos.iso
+```
 
-# Every subsequent build
-make docker-iso         # freeze kernel, compile, link, create pythonos.iso
+### Subsequent builds (fast — libpython is cached)
+
+```bash
+make                # rebuild kernel + ISO if sources changed
 ```
 
 ### Run
 
 ```bash
-# Boot in QEMU, serial output to terminal
-make qemu-iso
+# x86_64 — boots in QEMU, serial console in your terminal
+make run
 
-# Capture serial output to file (useful for debugging)
-timeout 30 qemu-system-x86_64 \
-  -machine q35 -cpu qemu64 -m 512M \
-  -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-  -device intel-hda -device hda-duplex \
-  -no-reboot -no-shutdown \
-  -cdrom pythonos.iso -boot d \
-  -display none -serial file:/tmp/serial.log
-cat /tmp/serial.log
+# arm64 — boots QEMU virt machine with PL011 serial console
+make run-arm64
+
+# Kill a running instance
+make stop
+make stop-arm64
 ```
 
-Expected boot output:
-```
-[PythonOS] INFO  kernel.boot: PMM ready — 510 MiB free
-[PythonOS] INFO  kernel.boot: 7 PCI devices found
-[PythonOS] INFO  kernel.boot: tmpfs mounted at /
-[PythonOS] INFO  kernel: framebuffer console ready
-[PythonOS] INFO  virtio-net: MAC 52:54:00:12:34:56
-[PythonOS] INFO  hda: driver ready
-[PythonOS] INFO  kernel: shell spawned — system ready
-[PythonOS] INFO  net: configured 10.0.2.15 gw=10.0.2.2
+Use `Ctrl-A X` to exit QEMU.
 
+### Connect to the TCP REPL
+
+Once the kernel is running, a multi-session Python REPL listens on TCP port 5000 inside QEMU. QEMU forwards it to your host:
+
+```bash
+# x86_64
+nc localhost 5555
+
+# arm64
+nc localhost 5556
+```
+
+Each connection gets an independent kernel shell with access to all live kernel objects. Multiple sessions can run simultaneously — this is the point: Python is the kernel, and concurrency is `asyncio`, not fork/exec.
+
+```python
 PythonOS kernel shell
 Python 3.14.0
 Type 'help' for kernel commands.
 
->>>
+>>> 1 + 1
+2
+>>> scheduler.ps()
+[Process(name='kshell', ...), Process(name='repl:...',  ...)]
+>>> vfs.ls("/")
+['dev', 'tmp', 'proc', 'sys', 'bin']
+>>> import kernel.log as log; log.info("hello from REPL")
 ```
 
-### Use the Shell
+### Serial shell
 
-The `>>>` prompt is a live Python REPL with full kernel access:
+The `>>>` prompt is also available on the serial console (the QEMU terminal window itself). All interactive I/O goes through COM1 (x86_64) or PL011 (arm64) — no PS/2, no framebuffer required.
 
-```python
->>> pci                         # inspect the PCI bus
->>> scheduler.tasks()           # list running kernel tasks
->>> vfs.ls("/")                 # browse the filesystem
->>> import kernel.log as log; log.info("hello")
->>> kernel.memory.pmm.free_pages
+### Run the smoke tests
+
+```bash
+make test
 ```
+
+This boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass.
 
 ---
 
@@ -78,28 +89,72 @@ The philosophical bet: "everything is an object" is a better organizing principl
 
 ### Boot Sequence
 
+#### x86_64
+
 ```
 GRUB2 (multiboot2)
   └─▶ boot.asm — long mode, 4 GiB identity map, 4 MiB stack
-        └─▶ main.c — GDT, IDT, PIC, PIT, serial
+        └─▶ main.c — GDT, IDT, PIC (8259A), PIT (100 Hz), COM1 serial
               └─▶ hal.c — CPython init, freeze frozen modules
                     └─▶ kernel.boot() — Python owns the machine
                           ├─▶ PMM + VMM
                           ├─▶ PCI enumeration + driver binding
-                          ├─▶ asyncio event loop
-                          ├─▶ Framebuffer console
-                          ├─▶ VirtIO-net, Intel HDA
+                          │     ├─▶ VirtIO-net (DMA descriptor rings)
+                          │     └─▶ Intel HDA (BDL DMA, codec)
+                          ├─▶ asyncio event loop (PIT-driven, 100 Hz)
                           ├─▶ Network stack (ARP/IP/TCP)
-                          └─▶ Interactive kernel shell
+                          ├─▶ TCP REPL server (port 5000, multi-session)
+                          ├─▶ COM1 serial input driver
+                          └─▶ Interactive kernel shell (serial + TCP)
+```
+
+#### arm64 (QEMU `virt`)
+
+```
+U-Boot / QEMU direct kernel load
+  └─▶ boot_arm64.asm — EL1, MMU off, 4 MiB stack
+        └─▶ main_arm64.c — GIC v2, generic timer (100 Hz), PL011 serial
+              └─▶ hal.c — CPython init, freeze frozen modules
+                    └─▶ kernel.boot() — Python owns the machine
+                          ├─▶ PMM + VMM
+                          ├─▶ VirtIO-MMIO block device (raw disk image)
+                          ├─▶ asyncio event loop (GIC timer-driven)
+                          ├─▶ PL011 serial input driver
+                          └─▶ Interactive kernel shell (serial)
+```
+
+### Expected Boot Output (x86_64)
+
+```
+[PythonOS] INFO  kernel.boot: interrupt router connected
+[PythonOS] INFO  kernel.boot: PMM ready — 510 MiB free
+[PythonOS] INFO  kernel.boot: VMM ready
+[PythonOS] INFO  kernel.boot: enumerating PCI bus...
+[PythonOS] INFO  kernel.boot: 7 PCI devices found
+[PythonOS] INFO  kernel.boot: tmpfs mounted at /
+[PythonOS] INFO  kernel.boot: event loop ready
+[PythonOS] INFO  kernel: no framebuffer — serial only
+[PythonOS] INFO  kernel: COM1 serial input ready
+[PythonOS] INFO  virtio-net: MAC 52:54:00:12:34:56
+[PythonOS] INFO  kernel: network stack starting
+[PythonOS] INFO  repl: TCP REPL listening on port 5000 — connect: nc localhost 5555
+[PythonOS] INFO  kernel: shell spawned — system ready
+
+PythonOS kernel shell
+Python 3.14.0
+Type 'help' for kernel commands.
+
+>>>
 ```
 
 ### Source Layout
 
 ```
 src/
-  boot/       asm + C bootstrap: GDT, IDT, PIC, PIT, serial, framebuffer
-  hal/        hal.c — _hal Python C extension (port I/O, MMIO, interrupts, DMA)
-  libc/       freestanding libc: buddy allocator, string, stdio, POSIX stubs
+  boot/         asm + C bootstrap: GDT, IDT, PIC, PIT, serial, framebuffer (x86_64)
+                boot_arm64.asm, main_arm64.c — GIC, generic timer (arm64)
+  hal/          hal.c — _hal Python C extension (port I/O, MMIO, interrupts, DMA)
+  libc/         freestanding libc: buddy allocator, string, stdio, POSIX stubs
 
 kernel/
   __init__.py        boot() entry point — wires all subsystems
@@ -108,18 +163,32 @@ kernel/
   bus/pci.py         PCI enumeration (CF8/CFC), driver Protocol, PCIBus
   memory/            PMM (page frame allocator), VMM (virtual address spaces)
   drivers/
-    keyboard.py      PS/2 keyboard driver (async character queue)
-    net/virtio_net.py  VirtIO-net driver (DMA descriptor rings)
+    input/
+      com1.py        COM1 16550A serial input (x86_64 headless)
+      pl011.py       PL011 UART input (arm64 virt)
+    net/
+      virtio_net.py  VirtIO-net driver (DMA descriptor rings)
+    block/
+      virtio_blk.py  VirtIO-MMIO block driver (arm64)
   sound/hda.py       Intel HDA driver (BDL DMA, codec configuration)
-  net/               ARP, IP, TCP, network stack initialization
+  net/
+    ethernet.py      Ethernet frame encode/decode
+    arp.py           ARP request/reply
+    ip.py            IPv4 packet encode/decode, checksum
+    tcp.py           TCP state machine (connect + listen/accept)
+    stack.py         Network stack init, ARP/IP dispatch
+    repl_server.py   Multi-session TCP REPL server (port 5000)
   fs/                VFS + tmpfs
-  scheduler.py       asyncio task scheduler
+  scheduler.py       asyncio task scheduler (ps, spawn)
   shell.py           interactive Python kernel shell
   display/           framebuffer + bitmap font console
-  log.py             early serial logging via _hal
+  log.py             serial logging via _hal (arch-aware: COM1 / PL011)
 
 asyncio/             bare-metal asyncio (no socket/selectors): Future, Task,
                      Queue, Event, Lock, Semaphore, sleep, wait_for, gather
+
+tests/
+  smoke_test.py      boots QEMU, connects to TCP REPL, verifies kernel commands
 
 tools/
   freeze_kernel.py   compiles kernel/*.py → frozen C bytecode in the ELF
@@ -150,15 +219,16 @@ All kernel Python modules are **frozen** — compiled to bytecode and embedded i
 
 | Function | Description |
 |---|---|
-| `inb/inw/inl(port)` | Port I/O reads |
-| `outb/outw/outl(port, val)` | Port I/O writes |
+| `inb/inw/inl(port)` | Port I/O reads (x86_64) |
+| `outb/outw/outl(port, val)` | Port I/O writes (x86_64) |
 | `mmio_read8/32(addr)` | Memory-mapped I/O reads |
-| `mmio_write32(addr, val)` | Memory-mapped I/O write |
+| `mmio_write8/32(addr, val)` | Memory-mapped I/O writes |
 | `dma_alloc(size)` | Allocate zeroed C-heap DMA buffer, return physical address |
 | `buf_addr(bytearray)` | Return physical address of bytearray's internal buffer |
-| `read_cr2/cr3()` | Control register reads |
+| `read_cr2/cr3()` | Control register reads (x86_64) |
 | `set_interrupt_router(fn)` | Register Python interrupt dispatcher |
 | `set_event_loop(loop)` | Register asyncio loop for interrupt-safe dispatch |
+| `ARCH` | String constant: `"x86_64"` or `"arm64"` |
 
 ### DMA Memory
 
@@ -166,7 +236,11 @@ Python's garbage collector must never touch DMA buffers (device-visible memory).
 
 ### Bare-Metal asyncio
 
-The `asyncio/` package is a from-scratch implementation of the asyncio API — no `select`, no sockets, no `selectors`. The event loop is driven by the PIT timer (100 Hz) and hardware interrupt callbacks routed through `call_soon_threadsafe`. Full API: `Future`, `Task`, `Queue`, `Event`, `Lock`, `Semaphore`, `sleep`, `wait_for`, `gather`, `ensure_future`.
+The `asyncio/` package is a from-scratch implementation of the asyncio API — no `select`, no sockets, no `selectors`. The event loop is driven by the PIT timer on x86_64 or the GIC generic timer on arm64 (both at 100 Hz), with hardware interrupt callbacks routed through `call_soon_threadsafe`. Full API: `Future`, `Task`, `Queue`, `Event`, `Lock`, `Semaphore`, `sleep`, `wait_for`, `gather`, `ensure_future`.
+
+### Multi-Session TCP REPL
+
+The REPL server (`kernel/net/repl_server.py`) listens on TCP port 5000. Each incoming connection spawns a new `asyncio` task running an independent `Shell` instance. All sessions share the same live kernel namespace — `scheduler`, `vfs`, `pci_bus`, the network stack — because they are all coroutines inside the same Python process that *is* the kernel. This is the most direct possible demonstration that Python-as-kernel supports preemptive multitasking: multiple interactive sessions, zero threads, zero processes, one interpreter.
 
 ### Stdlib Stubs
 
@@ -183,6 +257,8 @@ Several stdlib modules assume a POSIX host and break on bare metal. `tools/stdli
 | `linecache.py` | No source files on bare metal; no-op cache. |
 | `inspect.py`, `pathlib.py` | Minimal stubs used during module discovery. |
 
+Real stdlib files that *are* frozen verbatim: `enum`, `typing`, `operator`, `types`, `reprlib`, `keyword`, `copy`, `weakref`, `_weakrefset`, `contextlib`, `warnings`, `copyreg`, `struct`, `codeop`, `__future__`, `re`, `collections`.
+
 ---
 
 ## Building CPython for Bare Metal
@@ -195,6 +271,47 @@ The CPython configuration disables everything that requires a host OS:
 - Built-in modules only: `_struct`, `_collections`, `_functools`, `_io`, `_signal`, `math`, `_warnings`, `_weakref`, `_abc`, `_json`, `_csv`, `_datetime`, `_pickle`, `_random`, `_bisect`, `_heapq`, `_operator`, `_stat`, `array`, `binascii`, `zlib`, `_hashlib`, `_sha256`, `_sha512`, `_blake2`, `_md5`, and `_hal`
 
 See `deps/Modules.Setup.local` for the complete list and `tools/setup_cpython.sh` for the configure flags.
+
+---
+
+## The Totally True and Not At All Embellished History of PythonOS
+
+### The continuing adventures of Jordan Hubbard and Sir Reginald von Fluffington III
+
+> *Part 6 of an ongoing chronicle.  [← Part 5: WebMux](https://github.com/jordanhubbard/webmux#the-totally-true-and-not-at-all-embellished-history-of-webmux)*
+> *Sir Reginald von Fluffington III appears throughout.  He does not endorse any of it.*
+
+It began, as many of the programmer's projects do, with a sentence that sounded completely reasonable at the time.
+
+"The kernel," he announced to the living room at large, "should be written in Python."
+
+Sir Reginald von Fluffington III was asleep on top of the programmer's copy of *Modern Operating Systems*, which he had been using as a mat for three weeks and had no intention of vacating. He did not open his eyes. He did not move. He did, however, lower one ear approximately four degrees — the feline equivalent of a raised eyebrow — before returning to the serious business of being unconscious.
+
+The programmer took this as encouragement.
+
+The idea was not new, exactly. Embedded Python had existed for years. MicroPython ran on microcontrollers. Plenty of people had run Python *on* operating systems. But running Python *as* the operating system — as the interrupt handler, the memory manager, the scheduler, the filesystem, the network stack — that was a different claim. The programmer called it "elegant." Sir Reginald, who had heard this word applied to seventeen previous decisions of varying quality, updated a private ledger entry he maintained under the heading *"Hubris, General."*
+
+The first problem was CPython itself. The interpreter was designed to run on a POSIX host. It expected `fork`. It expected `select`. It expected a great many things that do not exist when the machine has just powered on and there is no OS beneath you. The programmer spent several weeks writing `configure` flags that deleted these expectations one at a time, like a careful editor removing every assumption that civilization exists. The result was `libpython3.14.a`: a static library containing the full Python interpreter, stripped of every syscall it had ever trusted, linked directly into the kernel ELF.
+
+"No `socket`. No `readline`. No `fork`," the programmer told Sir Reginald, presenting the `Modules.Setup.local` like a trophy. Sir Reginald examined it by sitting on it. Then he sat on the keyboard. The programmer, interpreting this as a request for a demonstration, moved the cat, opened a terminal, and typed `make run`.
+
+The kernel booted. Python initialized. The `>>>` prompt appeared on the serial console. Sir Reginald, who had relocated to the cable routing behind the monitor, was unavailable for comment.
+
+What made the project genuinely strange was the interrupt model. In a normal OS, hardware interrupts are handled in C, which carefully manages processor state before dispatching to higher-level code. In PythonOS, the C bootstrap handles the raw vector, then immediately calls `asyncio.get_event_loop().call_soon_threadsafe(interrupt_router, vector)` — and Python takes it from there. The PIT timer fires 100 times a second. The GIC fires 100 times a second on arm64. Both route through the same Python `@interrupt` decorator. The scheduler is `asyncio`. The kernel shell is `await shell.run()`. The entire operating system is, at runtime, a set of coroutines.
+
+Sir Reginald was not impressed by this. He had watched the programmer write asynchronous code before and knew where it ended: debugging `asyncio.ensure_future` at two in the morning while muttering about the event loop.
+
+The arm64 port required a separate detour. QEMU's `virt` machine has no PCI bus — only VirtIO-MMIO, a GIC interrupt controller, and a PL011 UART. The programmer ported the timer, the serial driver, and the block device by reading ARM Architecture Reference Manual sections that Sir Reginald found structurally identical to the programmer's earlier operating systems reading in that both involved large books and produced no tuna.
+
+The TCP REPL was the part the programmer was most pleased with. Having added a TCP stack from scratch — ARP resolution, IPv4, a basic TCP state machine with SYN/SYN-ACK/ACK, FIN handling, a `TCPListener` class — he wired it to the kernel shell and exposed it on port 5000. QEMU forwarded host port 5555 to guest port 5000. `nc localhost 5555` connected to a live Python interpreter that *was* the kernel. Multiple sessions could run simultaneously. Each session shared the same live kernel objects — `vfs`, `scheduler`, the PCI bus — because they were all coroutines in the same process that happened to be the operating system.
+
+"This," the programmer said, "proves that Python is a real multitasking kernel."
+
+Sir Reginald walked across the keyboard. The shell printed `TypeError: unsupported operand` and terminated. The programmer noted this was a separate bug and filed it accordingly.
+
+The smoke test was added last, as things tend to be when the thing being tested is a kernel that takes forty-five seconds to compile and requires QEMU to run. `tests/smoke_test.py` boots the ISO as a subprocess, waits for the TCP REPL to become reachable, connects, and verifies that `1 + 1` returns `2`, that `vfs is not None` returns `True`, that `1 / 0` raises `ZeroDivisionError`, and that the kernel's scheduler and filesystem are alive and accessible from a remote TCP session. If any of these fail, `make test` exits non-zero. Sir Reginald has never run `make test`. He has, however, sat on the test output twice, which the programmer is counting as a code review.
+
+As of this writing, PythonOS has been used in production by exactly one person, who also wrote it. Sir Reginald continues to withhold his endorsement across all 6 projects, citing "procedural concerns," "insufficient tuna," "a general atmosphere of hubris," and, now, "the fundamental unseriousness of an operating system that can be interrupted by the garbage collector."
 
 ---
 
