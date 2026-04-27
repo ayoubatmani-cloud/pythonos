@@ -40,3 +40,4 @@ int    getegid(void);
 int    getuid(void);
 int    getgid(void);
 unsigned int alarm(unsigned int seconds);
+int pause(void);

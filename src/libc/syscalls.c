@@ -207,6 +207,8 @@ int nanosleep(const struct timespec *req, struct timespec *rem) {
     (void)req; (void)rem; return 0;
 }
 
+int pause(void) { errno = EINTR; return -1; }
+
 int isatty(int fd) { return fd == 1 || fd == 2; }
 
 long syscall(long number, ...) { (void)number; return 1; }
