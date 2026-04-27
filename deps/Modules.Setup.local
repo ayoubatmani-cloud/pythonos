@@ -68,9 +68,9 @@ unicodedata   unicodedata.c
 # (python_hashlib_Hacl_Hash_SHA1_*/MD5_*) which we don't provide
 # _sha1         sha1module.c
 # _md5          md5module.c
-_blake2       # skip — needs HACL library (Modules/_hacl/); not provided
-_hashlib      # skip — needs OpenSSL
-_ssl          # skip — needs OpenSSL
+# _blake2 skipped — needs HACL library (Modules/_hacl/); not provided
+# _hashlib skipped — needs OpenSSL
+# _ssl skipped — needs OpenSSL
 
 # ── Platform-specific — EXCLUDE (no POSIX) ────────────────────────────────
 # _posixsubprocess  # no fork
