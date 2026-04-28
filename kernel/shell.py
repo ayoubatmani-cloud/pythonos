@@ -9,8 +9,29 @@ Two I/O backends:
   - Console (framebuffer): default when a display is present
   - Serial (COM1):         always mirrored; primary when no display
 
-The shell namespace includes everything a kernel developer needs:
-kernel, pci, vfs, scheduler, memory — live objects, not copies.
+Command dispatch
+----------------
+Bare words that are not Python names are looked up as /bin/<word>.py and
+executed automatically, so the user can type:
+
+    sysinfo
+    ls /tmp
+    cd /bin
+    ps
+
+Scripts receive two extra namespace variables:
+  argv  — list of string arguments (may be empty)
+  cwd   — current working directory string
+
+Top-level `await` is supported in scripts via PyCF_ALLOW_TOP_LEVEL_AWAIT,
+so scripts can call async VFS operations directly:
+
+    entries = await vfs.readdir(path)
+
+The `sh()` built-in provides the same dispatch programmatically:
+
+    sh('ls /tmp')
+    sh('cp /bin/sysinfo.py /tmp/copy.py')
 """
 
 
@@ -30,6 +51,7 @@ class Shell:
         self._write = write
         self._buf   = ""         # accumulated input line
         self._block = ""         # accumulated multi-line block
+        self._cwd   = "/"        # current working directory
         self._ns    = self._build_namespace()
 
     def _build_namespace(self) -> dict:
@@ -38,7 +60,7 @@ class Shell:
         import kernel.net as net
         import kernel.sound as sound
         from kernel.bus.pci import bus as pci
-        from kernel.fs.vfs import vfs
+        from kernel.fs.vfs import vfs, OpenFlags
         from kernel.scheduler import scheduler
         import kernel.display as display
 
@@ -48,21 +70,25 @@ class Shell:
             "log":       log,
             "pci":       pci,
             "vfs":       vfs,
+            "OpenFlags": OpenFlags,
             "net":       net,
             "sound":     sound,
             "scheduler": scheduler,
             "display":   display,
             "help":      lambda: self._help(),
-            "ps":        lambda: self._ps(),
-            "ls":        lambda path="/": self._ls(path),
             "clear":     lambda: self._clear(),
+            "sh":        lambda cmd: self._sh(cmd),
+            "run":       lambda path: self._run(path),
+            "print":     lambda *args, sep=" ", end="\n":
+                             self._write(sep.join(str(a) for a in args) + end),
+            "cwd":       "/",
         }
         return ns
 
     async def run(self) -> None:
-        self._write(f"\nPythonOS kernel shell\n")
-        self._write(f"Python {__import__('sys').version}\n")
-        self._write(f"Type 'help' for kernel commands.\n\n")
+        self._write("\nPythonOS kernel shell\n")
+        self._write("Python " + __import__('sys').version + "\n")
+        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  sysinfo  netstat\n\n")
         self._write(self.PROMPT)
 
         while True:
@@ -97,6 +123,12 @@ class Shell:
 
         src = self._block
         self._block = ""
+
+        # Shell command dispatch: bare word(s) not in Python namespace → /bin/<name>.py
+        if await self._try_shell_dispatch(src):
+            self._write(self.PROMPT)
+            return
+
         src = self._fixup_source(src)
 
         try:
@@ -104,7 +136,6 @@ class Shell:
             try:
                 result = eval(compile(src.strip(), "<shell>", "eval"), self._ns)
                 if result is not None:
-                    # Await coroutines automatically
                     if asyncio.iscoroutine(result):
                         result = await result
                     self._write(repr(result) + "\n")
@@ -118,6 +149,90 @@ class Shell:
 
         self._write(self.PROMPT)
 
+    # ── Shell command dispatch ────────────────────────────────────────────────
+
+    async def _try_shell_dispatch(self, src: str) -> bool:
+        """Dispatch a bare command name to /bin/<name>.py.  Returns True if handled."""
+        line = src.strip()
+        # Only dispatch single-line input that looks like a shell invocation
+        if not line or '\n' in line:
+            return False
+        parts = line.split()
+        name = parts[0]
+        # Must be a plain identifier (no dots, parens, operators…)
+        if not name.isidentifier():
+            return False
+        # Skip Python keywords
+        try:
+            import keyword
+            if keyword.iskeyword(name):
+                return False
+        except ImportError:
+            pass
+        # Don't shadow names already live in the Python namespace
+        if name in self._ns:
+            return False
+        return await self._run_script("/bin/" + name + ".py", parts[1:])
+
+    async def _run_script(self, path: str, args: list) -> bool:
+        """Load and exec a /bin script.  Returns False if the file is not found."""
+        from kernel.fs.vfs import vfs
+        try:
+            fd = await vfs.open(path)
+        except Exception:
+            return False
+
+        chunks = []
+        while True:
+            chunk = await vfs.read(fd, 4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        vfs.close(fd)
+
+        src = b"".join(chunks).decode("utf-8")
+        src = self._fixup_source(src)
+
+        # Give scripts their own local view; argv and cwd are script-visible
+        local_ns = dict(self._ns)
+        local_ns['argv'] = args
+        local_ns['cwd']  = self._cwd
+
+        try:
+            # PyCF_ALLOW_TOP_LEVEL_AWAIT lets scripts use `await` at module level
+            _flag = getattr(__import__('ast'), 'PyCF_ALLOW_TOP_LEVEL_AWAIT', 0)
+            code  = compile(src, path, "exec", flags=_flag)
+            coro  = eval(code, local_ns)
+            if asyncio.iscoroutine(coro):
+                await coro
+        except Exception:
+            self._write(traceback.format_exc())
+
+        # Propagate cwd changes made by the script (e.g. cd.py sets cwd = target)
+        new_cwd = local_ns.get('cwd')
+        if isinstance(new_cwd, str) and new_cwd != self._cwd:
+            self._cwd = new_cwd
+            self._ns['cwd'] = new_cwd
+
+        return True
+
+    async def _sh(self, cmd: str) -> None:
+        """Programmatic shell dispatch: sh('ls /tmp'), sh('cp src dst'), …"""
+        parts = cmd.strip().split()
+        if not parts:
+            return
+        name = parts[0]
+        args = parts[1:]
+        if not await self._run_script("/bin/" + name + ".py", args):
+            self._write("sh: " + name + ": command not found\n")
+
+    async def _run(self, path: str) -> None:
+        """run('/full/path/to/script.py') — execute any VFS file by absolute path."""
+        if not await self._run_script(path, []):
+            self._write("run: " + path + ": not found\n")
+
+    # ── Source fixups for frozen Python 3.14 ─────────────────────────────────
+
     @staticmethod
     def _fixup_source(src: str) -> str:
         """Rewrite 'is [not] None/True/False' → '==/!= None/True/False'.
@@ -126,8 +241,8 @@ class Shell:
         equality equivalents work correctly for singleton constants.
         """
         for kw in ('None', 'True', 'False'):
-            src = src.replace(f'is not {kw}', f'!= {kw}')
-            src = src.replace(f'is {kw}', f'== {kw}')
+            src = src.replace('is not ' + kw, '!= ' + kw)
+            src = src.replace('is ' + kw, '== ' + kw)
         return src
 
     @staticmethod
@@ -146,34 +261,27 @@ class Shell:
 
     def _help(self) -> None:
         self._write(
-            "\nShell commands:\n"
-            "  help()              — this message\n"
-            "  ps()               — list kernel tasks\n"
-            "  ls()  ls('/proc')  — list directory\n"
-            "  clear()            — clear framebuffer console\n"
-            "\nLive kernel objects (use as variables, not functions):\n"
+            "\nCommands (type bare name or sh('cmd args')):\n"
+            "  ls [path]      — list directory\n"
+            "  ps             — kernel task list\n"
+            "  pwd            — print working directory\n"
+            "  cd [path]      — change directory\n"
+            "  cp SRC DST     — copy file\n"
+            "  mv SRC DST     — move / rename file\n"
+            "  sysinfo        — system overview\n"
+            "  netstat        — network status\n"
+            "  clear()        — clear framebuffer console\n"
+            "  run('/path')   — run script by absolute path\n"
+            "  sh('cmd args') — same, with shell-style argument splitting\n"
+            "\nLive kernel objects:\n"
             "  pci        — PCI bus: list(pci), pci.find_by_class(0x0200)\n"
             "  scheduler  — task scheduler: scheduler.ps()\n"
             "  vfs        — filesystem: await vfs.readdir('/')\n"
             "  display    — framebuffer / console\n"
-            "  net        — network: net.local_ip, await net.tcp.connect(ip, port)\n"
+            "  net        — network: net.local_ip\n"
             "  sound      — HDA audio: sound.hda.generate_tone(freq, ms)\n"
-            "\nAll objects are live — mutations take effect immediately.\n\n"
+            "  cwd        — current working directory (string)\n\n"
         )
-
-    def _ps(self) -> None:
-        from kernel.scheduler import scheduler
-        for proc in scheduler.ps():
-            self._write(f"  {proc.pid:3d}  {proc.name:<20}  {proc.state.name}  "
-                        f"ticks={proc.ticks}\n")
-
-    async def _ls(self, path: str) -> None:
-        from kernel.fs.vfs import vfs
-        try:
-            entries = await vfs.readdir(path)
-            self._write("  ".join(entries) + "\n")
-        except Exception as e:
-            self._write(f"ls: {e}\n")
 
     def _clear(self) -> None:
         from kernel.display.console import console

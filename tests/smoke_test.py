@@ -43,6 +43,8 @@ TEST_CASES = [
     ("vfs is not None\n",               "True"),
     ("len([x*x for x in range(5)])\n",  "5"),
     ("1 / 0\n",                         "ZeroDivisionError"),
+    ("run('/bin/sysinfo.py')\n",        "PythonOS"),
+    ("run('/bin/netstat.py')\n",        "Interface"),
 ]
 
 

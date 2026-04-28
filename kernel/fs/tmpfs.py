@@ -39,6 +39,11 @@ class TmpfsNode:
         self._data[offset:end] = data
         return len(data)
 
+    async def truncate(self, size: int = 0) -> None:
+        if self.inode_type != InodeType.FILE:
+            raise IsADirectoryError
+        self._data = self._data[:size]
+
     async def readdir(self) -> list[str]:
         if self.inode_type != InodeType.DIR:
             raise NotADirectoryError
@@ -76,8 +81,6 @@ class TmpFS:
         self._seed_node(self._root, tree)
 
     def _seed_node(self, node: TmpfsNode, tree: dict) -> None:
-        import asyncio
-        loop = asyncio.get_event_loop()
         for name, val in tree.items():
             if isinstance(val, dict):
                 child = TmpfsNode(InodeType.DIR, mode=0o755)

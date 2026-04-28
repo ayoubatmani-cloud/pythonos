@@ -61,6 +61,7 @@ class FSNode(Protocol):
     async def stat(self) -> Stat: ...
     async def read(self, offset: int, n: int) -> bytes: ...
     async def write(self, offset: int, data: bytes) -> int: ...
+    async def truncate(self, size: int = 0) -> None: ...
     async def readdir(self) -> list[str]: ...
     async def lookup(self, name: str) -> "FSNode": ...
     async def create(self, name: str, inode_type: InodeType) -> "FSNode": ...
@@ -120,9 +121,21 @@ class VFS:
     # ── fd operations ─────────────────────────────────────────────────────────
 
     async def open(self, path: str, flags: OpenFlags = OpenFlags.RDONLY) -> int:
-        node = await self._resolve(path)
+        if flags & OpenFlags.CREAT:
+            try:
+                node = await self._resolve(path)
+            except FileNotFoundError:
+                s = "/" + path.strip("/")
+                parts = [p for p in s.split("/") if p]
+                if not parts:
+                    raise IsADirectoryError("cannot create root")
+                parent_s = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
+                parent = await self._resolve(parent_s)
+                node = await parent.create(parts[-1], InodeType.FILE)
+        else:
+            node = await self._resolve(path)
         if flags & OpenFlags.TRUNC:
-            await node.write(0, b"")
+            await node.truncate()
         fd = self._next_fd
         self._next_fd += 1
         self._fds[fd] = FileDescription(node=node, flags=flags)
