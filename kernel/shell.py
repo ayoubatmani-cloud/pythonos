@@ -40,6 +40,9 @@ import traceback
 from typing import Callable, Awaitable
 
 
+_PYCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000
+
+
 class Shell:
     PROMPT      = ">>> "
     CONT_PROMPT = "... "
@@ -88,7 +91,7 @@ class Shell:
     async def run(self) -> None:
         self._write("\nPythonOS kernel shell\n")
         self._write("Python " + __import__('sys').version + "\n")
-        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  sysinfo  netstat\n\n")
+        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  vi  sysinfo  netstat\n\n")
         self._write(self.PROMPT)
 
         while True:
@@ -191,17 +194,21 @@ class Shell:
         vfs.close(fd)
 
         src = b"".join(chunks).decode("utf-8")
+
+        if await self._try_precompiled_script(path, args, src):
+            return True
+
         src = self._fixup_source(src)
 
         # Give scripts their own local view; argv and cwd are script-visible
         local_ns = dict(self._ns)
         local_ns['argv'] = args
         local_ns['cwd']  = self._cwd
+        local_ns['_write'] = self._write
 
         try:
             # PyCF_ALLOW_TOP_LEVEL_AWAIT lets scripts use `await` at module level
-            _flag = getattr(__import__('ast'), 'PyCF_ALLOW_TOP_LEVEL_AWAIT', 0)
-            code  = compile(src, path, "exec", flags=_flag)
+            code  = compile(src, path, "exec", flags=_PYCF_ALLOW_TOP_LEVEL_AWAIT)
             coro  = eval(code, local_ns)
             if asyncio.iscoroutine(coro):
                 await coro
@@ -209,12 +216,66 @@ class Shell:
             self._write(traceback.format_exc())
 
         # Propagate cwd changes made by the script (e.g. cd.py sets cwd = target)
-        new_cwd = local_ns.get('cwd')
+        self._update_cwd(local_ns.get('cwd'))
+
+        return True
+
+    async def _try_precompiled_script(self, path: str, args: list, src: str) -> bool:
+        """Run known seeded scripts from frozen bytecode when available."""
+        if path.startswith("/bin/") and path.endswith(".py") and "/" not in path[len("/bin/"):]:
+            try:
+                import kernel.commands as commands
+                name = path[len("/bin/"):]
+                if commands.SCRIPTS.get(name) != src:
+                    return False
+                func = getattr(commands, name[:-3], None)
+                if func is None:
+                    return False
+                if name == "vi.py":
+                    result = func(args, self._cwd, self._write, self._read)
+                else:
+                    result = func(args, self._cwd, self._write)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                self._update_cwd(result)
+                return True
+            except Exception:
+                self._write(traceback.format_exc())
+                return True
+
+        if path.startswith("/examples/") and path.endswith(".py"):
+            try:
+                from kernel.frozen_sources import SOURCES
+                if SOURCES.get(path) != src:
+                    return False
+                mod_name = "examples." + path[len("/examples/"):-3].replace("/", ".")
+                import sys
+                sys.modules.pop(mod_name, None)
+                mod = __import__(mod_name, fromlist=["main"])
+                main = getattr(mod, "main", None)
+                if main is None:
+                    self._write("run: " + path + ": no main() in frozen example\n")
+                    return True
+                result = main(
+                    argv=args,
+                    cwd=self._cwd,
+                    read_char=self._read,
+                    write=self._write,
+                )
+                if asyncio.iscoroutine(result):
+                    result = await result
+                self._update_cwd(result)
+                return True
+            except Exception:
+                self._write(traceback.format_exc())
+                return True
+
+        return False
+
+    def _update_cwd(self, new_cwd) -> None:
         if isinstance(new_cwd, str) and new_cwd != self._cwd:
             self._cwd = new_cwd
             self._ns['cwd'] = new_cwd
-
-        return True
 
     async def _sh(self, cmd=None) -> None:
         """sh() → interactive sub-shell.  sh('cmd args') → dispatch to /bin/."""
@@ -299,6 +360,7 @@ class Shell:
             "  cd [path]      — change directory\n"
             "  cp SRC DST     — copy file\n"
             "  mv SRC DST     — move / rename file\n"
+            "  vi [path]      — small Python line editor\n"
             "  sysinfo        — system overview\n"
             "  netstat        — network status\n"
             "  clear()        — clear framebuffer console\n"

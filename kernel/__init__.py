@@ -61,97 +61,26 @@ def boot(mmap: list[tuple[int, int]],
 
     # ── Filesystem ─────────────────────────────────────────────────────────
     root_fs = TmpFS()
+    import kernel.commands as commands
+    try:
+        from kernel.frozen_sources import SOURCES as _seed_sources
+    except Exception:
+        _seed_sources = {}
+    _examples = {}
+    for _path, _source in _seed_sources.items():
+        if not _path.startswith("/examples/"):
+            continue
+        _rel = _path[len("/examples/"):]
+        if "/" not in _rel:
+            _examples[_rel] = _source
+
     root_fs.seed({
         "dev": {},
         "tmp": {},
         "proc": {},
         "sys": {},
-        "bin": {
-            # Scripts run in the shell namespace (vfs, scheduler, net, pci, OpenFlags,
-            # argv, cwd, print are all pre-bound).  Top-level await is supported.
-            # Avoid f-strings and %-in-genexpr — frozen Python 3.14 rejects them.
-            "sysinfo.py": (
-                "print('PythonOS')\n"
-                "tasks = list(scheduler.ps())\n"
-                "print('Scheduler: ' + str(len(tasks)) + ' tasks')\n"
-                "print('cwd: ' + cwd)\n"
-            ),
-            "netstat.py": (
-                "print('Interface   local_ip')\n"
-                "print('lo         127.0.0.1')\n"
-                "print('eth0       ' + str(net.local_ip))\n"
-            ),
-            "ls.py": (
-                "path = argv[0] if argv else cwd\n"
-                "if path and not path.startswith('/'):\n"
-                "    path = cwd.rstrip('/') + '/' + path\n"
-                "entries = await vfs.readdir(path)\n"
-                "for e in entries:\n"
-                "    print(e)\n"
-            ),
-            "ps.py": (
-                "for p in scheduler.ps():\n"
-                "    pid  = str(p.pid).rjust(4)\n"
-                "    name = p.name.ljust(22)\n"
-                "    print(pid + '  ' + name + '  ' + p.state.name)\n"
-            ),
-            "pwd.py": "print(cwd)\n",
-            "cd.py": (
-                "if argv:\n"
-                "    target = argv[0]\n"
-                "    if not target.startswith('/'):\n"
-                "        target = cwd.rstrip('/') + '/' + target\n"
-                "    parts = []\n"
-                "    for seg in target.split('/'):\n"
-                "        if seg == '..':\n"
-                "            if parts:\n"
-                "                parts.pop()\n"
-                "        elif seg and seg != '.':\n"
-                "            parts.append(seg)\n"
-                "    target = '/' + '/'.join(parts)\n"
-                "    entries = await vfs.readdir(target)\n"
-                "    cwd = target\n"
-                "else:\n"
-                "    cwd = '/'\n"
-            ),
-            "cp.py": (
-                "if len(argv) < 2:\n"
-                "    print('usage: cp SRC DST')\n"
-                "else:\n"
-                "    src = argv[0] if argv[0].startswith('/') else cwd.rstrip('/') + '/' + argv[0]\n"
-                "    dst = argv[1] if argv[1].startswith('/') else cwd.rstrip('/') + '/' + argv[1]\n"
-                "    fd_r = await vfs.open(src)\n"
-                "    data = b''\n"
-                "    while True:\n"
-                "        chunk = await vfs.read(fd_r, 4096)\n"
-                "        if not chunk:\n"
-                "            break\n"
-                "        data = data + chunk\n"
-                "    vfs.close(fd_r)\n"
-                "    fd_w = await vfs.open(dst, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)\n"
-                "    await vfs.write(fd_w, data)\n"
-                "    vfs.close(fd_w)\n"
-            ),
-            "mv.py": (
-                "if len(argv) < 2:\n"
-                "    print('usage: mv SRC DST')\n"
-                "else:\n"
-                "    src = argv[0] if argv[0].startswith('/') else cwd.rstrip('/') + '/' + argv[0]\n"
-                "    dst = argv[1] if argv[1].startswith('/') else cwd.rstrip('/') + '/' + argv[1]\n"
-                "    fd_r = await vfs.open(src)\n"
-                "    data = b''\n"
-                "    while True:\n"
-                "        chunk = await vfs.read(fd_r, 4096)\n"
-                "        if not chunk:\n"
-                "            break\n"
-                "        data = data + chunk\n"
-                "    vfs.close(fd_r)\n"
-                "    fd_w = await vfs.open(dst, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)\n"
-                "    await vfs.write(fd_w, data)\n"
-                "    vfs.close(fd_w)\n"
-                "    await vfs.unlink(src)\n"
-            ),
-        },
+        "bin": commands.SCRIPTS,
+        "examples": _examples,
     })
     vfs.mount("/", root_fs)
     log.info("kernel.boot: tmpfs mounted at /")

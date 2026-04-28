@@ -19,7 +19,7 @@ import tempfile
 import time
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
-HOST_PORT = 5555
+HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 
@@ -45,6 +45,10 @@ TEST_CASES = [
     ("1 / 0\n",                         "ZeroDivisionError"),
     ("run('/bin/sysinfo.py')\n",        "PythonOS"),
     ("run('/bin/netstat.py')\n",        "Interface"),
+    ("sh('ps')\n",                      "kshell"),
+    ("ls /bin\n",                       "vi.py"),
+    ("ls /examples\n",                  "mini_vi.py"),
+    ("run('/examples/ascii_graphics.py')\n", "ASCII graphics demo"),
 ]
 
 

@@ -56,7 +56,7 @@ Each connection gets an independent kernel shell with access to all live kernel 
 ```
 PythonOS kernel shell
 Python 3.14.0a0
-Type 'help' for help.  Commands: ls  ps  pwd  cd  sysinfo  netstat
+Type 'help' for help.  Commands: ls  ps  pwd  cd  vi  sysinfo  netstat
 
 >>> 1 + 1
 2
@@ -65,7 +65,7 @@ PythonOS
 Scheduler: 3 tasks
 cwd: /
 >>> ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  vi.py  sysinfo.py  netstat.py
 >>> cd /tmp
 >>> pwd
 /tmp
@@ -94,6 +94,7 @@ Any bare identifier typed at `>>>` that is not already a Python name is looked u
 >>> ps
 >>> pwd
 >>> cd /tmp
+>>> vi /tmp/notes.txt
 >>> sysinfo
 >>> netstat
 ```
@@ -115,6 +116,7 @@ Arguments are split on whitespace and passed to the script as `argv`:
 | `cd [path]` | Change directory (supports `..`, relative paths; default: `/`) |
 | `cp SRC DST` | Copy a file |
 | `mv SRC DST` | Move / rename a file |
+| `vi [path]` | Small Python line editor |
 | `sysinfo` | System overview |
 | `netstat` | Network interface status |
 
@@ -125,7 +127,7 @@ Calling `sh()` with no arguments drops into an interactive shell with a `$ ` pro
 ```
 >>> sh()
 $ ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  vi.py  sysinfo.py  netstat.py
 $ cd /tmp
 $ pwd
 /tmp
@@ -166,6 +168,32 @@ Create a new command at runtime:
 hello, world
 >>> hello PythonOS
 hello, PythonOS
+```
+
+#### Example programs
+
+PythonOS also seeds `/examples` with readable Python programs that are frozen into the kernel as bytecode, so they can use normal functions, classes, async loops, and imports without depending on the limited runtime compiler:
+
+```
+>>> ls /examples
+README.txt  ascii_graphics.py  tone.py  recv_file.py  send_file.py  mini_vi.py
+>>> run('/examples/ascii_graphics.py')
+>>> run('/examples/tone.py')
+>>> vi /tmp/notes.txt
+```
+
+The file-transfer examples use the TCP stack and TmpFS:
+
+```
+# inbound to PythonOS; make run forwards host localhost:7000 to guest port 7000
+>>> run('/examples/recv_file.py')
+# host terminal:
+$ printf hello | nc localhost 7000
+
+# outbound from PythonOS to the QEMU host at 10.0.2.2
+# host terminal:
+$ nc -l 7001 > pythonos-example.txt
+>>> run('/examples/send_file.py')
 ```
 
 #### Mixing Python and shell
@@ -276,6 +304,8 @@ kernel/
   hal/               thin Python wrapper over _hal
   interrupts/        interrupt router, @interrupt decorator, default handlers
   bus/pci.py         PCI enumeration (CF8/CFC), driver Protocol, PCIBus
+  display/           framebuffer + bitmap font console
+  log.py             serial logging via _hal (arch-aware: COM1 / PL011)
   memory/            PMM (page frame allocator), VMM (virtual address spaces)
   drivers/
     input/
@@ -298,10 +328,11 @@ kernel/
   shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
 
 bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
-  ls.py, ps.py, pwd.py, cd.py, cp.py, mv.py   — filesystem / process utilities
+  ls.py, ps.py, pwd.py, cd.py, cp.py, mv.py, vi.py — filesystem / process utilities
   sysinfo.py, netstat.py                        — system / network status
-  display/           framebuffer + bitmap font console
-  log.py             serial logging via _hal (arch-aware: COM1 / PL011)
+
+examples/          frozen runnable demos, also seeded as readable source in /examples
+  ascii_graphics.py, tone.py, recv_file.py, send_file.py, mini_vi.py
 
 asyncio/             bare-metal asyncio (no socket/selectors): Future, Task,
                      Queue, Event, Lock, Semaphore, sleep, wait_for, gather

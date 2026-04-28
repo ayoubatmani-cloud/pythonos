@@ -66,6 +66,29 @@ def freeze_dir(src_dir: Path) -> dict[str, tuple[bytes, bool]]:
     return frozen
 
 
+def collect_seed_sources(src_dir: Path) -> dict[str, str]:
+    """Collect source files that should be visible in the boot TmpFS."""
+    if src_dir.name != "examples":
+        return {}
+
+    sources: dict[str, str] = {}
+    for source_file in sorted(src_dir.rglob("*")):
+        if not source_file.is_file():
+            continue
+        if source_file.name == "__init__.py":
+            continue
+        if source_file.suffix not in (".py", ".txt"):
+            continue
+        rel = source_file.relative_to(src_dir).as_posix()
+        sources["/examples/" + rel] = source_file.read_text(encoding="utf-8")
+    return sources
+
+
+def freeze_generated_module(module_name: str, source: str) -> tuple[bytes, bool]:
+    code = compile(source, "<generated " + module_name + ">", "exec", optimize=0)
+    return (marshal.dumps(code), False)
+
+
 def emit_c(frozen: dict[str, tuple[bytes, bool]], output: Path) -> None:
     n_modules = len(frozen)
 
@@ -117,8 +140,18 @@ def main() -> None:
             sys.exit(1)
 
     frozen: dict[str, tuple[bytes, bool]] = {}
+    seed_sources: dict[str, str] = {}
     for src_dir in src_dirs:
         frozen.update(freeze_dir(src_dir))
+        seed_sources.update(collect_seed_sources(src_dir))
+
+    if seed_sources:
+        source = "SOURCES = " + repr(seed_sources) + "\n"
+        frozen["kernel.frozen_sources"] = freeze_generated_module(
+            "kernel.frozen_sources",
+            source,
+        )
+
     emit_c(frozen, out)
 
 

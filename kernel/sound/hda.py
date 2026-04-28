@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from kernel.bus.pci import PCIDevice, PCIDriver, PCIClass
-from kernel.hal.io  import mmio_read32, mmio_write32
+from kernel.hal.io  import mmio_read32, mmio_write32, mmio_write8
 import kernel.log as log
 
 # ── PCI identity ──────────────────────────────────────────────────────────────
@@ -130,7 +130,8 @@ class HDADriver:
         self._base  = 0
         self._codec = 0
         self._dac_nid = 0
-        self._out_buffers: list[bytearray] = []
+        self._out_bufs_phys: list[int] = []
+        self._out_seg_bytes = 0
         self._write_idx = 0
         self._play_task: asyncio.Task | None = None
 
@@ -227,6 +228,7 @@ class HDADriver:
         # Allocate DMA buffers via C heap (GC-safe, persistent)
         import _hal
         seg_bytes = BUFFER_BYTES // NUM_BDL_ENTRIES
+        self._out_seg_bytes = seg_bytes
         self._out_bufs_phys = [_hal.dma_alloc(seg_bytes) for _ in range(NUM_BDL_ENTRIES)]
 
         # Build BDL in memory
@@ -274,11 +276,27 @@ class HDADriver:
         Returns number of bytes consumed.
         Non-blocking: drops data if buffer is full.
         """
-        buf = self._out_buffers[self._write_idx % NUM_BDL_ENTRIES]
-        n = min(len(pcm), len(buf))
-        buf[:n] = pcm[:n]
-        self._write_idx += 1
-        return n
+        if not self._out_bufs_phys or self._out_seg_bytes <= 0:
+            return 0
+
+        total = 0
+        slots = 0
+        while total < len(pcm) and slots < NUM_BDL_ENTRIES:
+            phys = self._out_bufs_phys[self._write_idx % NUM_BDL_ENTRIES]
+            n = min(len(pcm) - total, self._out_seg_bytes)
+            chunk = pcm[total:total + n]
+            for i in range(0, len(chunk) - 3, 4):
+                w = (chunk[i] |
+                     (chunk[i + 1] << 8) |
+                     (chunk[i + 2] << 16) |
+                     (chunk[i + 3] << 24))
+                mmio_write32(phys + i, w)
+            for i in range(len(chunk) - (len(chunk) % 4), len(chunk)):
+                mmio_write8(phys + i, chunk[i])
+            total += n
+            self._write_idx += 1
+            slots += 1
+        return total
 
     def generate_tone(self, freq: int = 440, ms: int = 1000) -> bytes:
         """Generate a sine wave tone as PCM bytes (for testing)."""

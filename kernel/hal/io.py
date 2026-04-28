@@ -24,6 +24,7 @@ write_cr3 = _hal.write_cr3
 mmio_read8   = _hal.mmio_read8
 mmio_read32  = _hal.mmio_read32
 mmio_write32 = _hal.mmio_write32
+mmio_write8  = _hal.mmio_write8
 
 
 def set_interrupt_router(fn) -> None:
