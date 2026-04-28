@@ -91,7 +91,7 @@ class Shell:
     async def run(self) -> None:
         self._write("\nPythonOS kernel shell\n")
         self._write("Python " + __import__('sys').version + "\n")
-        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  vi  sysinfo  netstat\n\n")
+        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  cp  mv  ftp  vi  sysinfo  netstat\n\n")
         self._write(self.PROMPT)
 
         while True:
@@ -138,9 +138,9 @@ class Shell:
             # Try as expression first (so we can print the value)
             try:
                 result = eval(compile(src.strip(), "<shell>", "eval"), self._ns)
+                if asyncio.iscoroutine(result):
+                    result = await result
                 if result is not None:
-                    if asyncio.iscoroutine(result):
-                        result = await result
                     self._write(repr(result) + "\n")
             except SyntaxError:
                 # Not an expression — exec as statement(s)
@@ -165,6 +165,9 @@ class Shell:
         # Must be a plain identifier (no dots, parens, operators…)
         if not name.isidentifier():
             return False
+        if name == "help" and len(parts) == 1:
+            self._help()
+            return True
         # Skip Python keywords
         try:
             import keyword
@@ -360,6 +363,7 @@ class Shell:
             "  cd [path]      — change directory\n"
             "  cp SRC DST     — copy file\n"
             "  mv SRC DST     — move / rename file\n"
+            "  ftp get/put    — copy files over TCP\n"
             "  vi [path]      — small Python line editor\n"
             "  sysinfo        — system overview\n"
             "  netstat        — network status\n"

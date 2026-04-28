@@ -56,7 +56,7 @@ Each connection gets an independent kernel shell with access to all live kernel 
 ```
 PythonOS kernel shell
 Python 3.14.0a0
-Type 'help' for help.  Commands: ls  ps  pwd  cd  vi  sysinfo  netstat
+Type 'help' for help.  Commands: ls  ps  pwd  cd  cp  mv  ftp  vi  sysinfo  netstat
 
 >>> 1 + 1
 2
@@ -65,7 +65,7 @@ PythonOS
 Scheduler: 3 tasks
 cwd: /
 >>> ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  vi.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  ftp.py  vi.py  sysinfo.py  netstat.py
 >>> cd /tmp
 >>> pwd
 /tmp
@@ -104,6 +104,8 @@ Arguments are split on whitespace and passed to the script as `argv`:
 ```
 >>> cp /bin/sysinfo.py /tmp/my_sysinfo.py
 >>> mv /tmp/my_sysinfo.py /tmp/sysinfo_backup.py
+>>> ftp get /tmp/host-file.txt
+>>> ftp put /tmp/host-file.txt
 ```
 
 #### Built-in commands
@@ -116,6 +118,8 @@ Arguments are split on whitespace and passed to the script as `argv`:
 | `cd [path]` | Change directory (supports `..`, relative paths; default: `/`) |
 | `cp SRC DST` | Copy a file |
 | `mv SRC DST` | Move / rename a file |
+| `ftp get DST [PORT]` | Receive one TCP file stream into TmpFS |
+| `ftp put SRC [HOST] [PORT]` | Send one TmpFS file over TCP |
 | `vi [path]` | Small Python line editor |
 | `sysinfo` | System overview |
 | `netstat` | Network interface status |
@@ -127,7 +131,7 @@ Calling `sh()` with no arguments drops into an interactive shell with a `$ ` pro
 ```
 >>> sh()
 $ ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  vi.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  ftp.py  vi.py  sysinfo.py  netstat.py
 $ cd /tmp
 $ pwd
 /tmp
@@ -182,19 +186,22 @@ README.txt  ascii_graphics.py  tone.py  recv_file.py  send_file.py  mini_vi.py
 >>> vi /tmp/notes.txt
 ```
 
-The file-transfer examples use the TCP stack and TmpFS:
+The `ftp` command provides a small FTP-like file copy workflow over one raw TCP stream. It is not the RFC FTP protocol; it is a simple get/put tool built for the PythonOS shell and TmpFS:
 
 ```
 # inbound to PythonOS; make run forwards host localhost:7000 to guest port 7000
->>> run('/examples/recv_file.py')
+>>> ftp get /tmp/inbox.txt
 # host terminal:
-$ printf hello | nc localhost 7000
+$ nc localhost 7000 < local-file.txt
+# run-arm64 forwards host localhost:7002 to guest port 7000
 
 # outbound from PythonOS to the QEMU host at 10.0.2.2
 # host terminal:
-$ nc -l 7001 > pythonos-example.txt
->>> run('/examples/send_file.py')
+$ nc -l 7001 > from-pythonos.txt
+>>> ftp put /tmp/inbox.txt
 ```
+
+The older file-transfer examples are still available as readable source at `/examples/recv_file.py` and `/examples/send_file.py`.
 
 #### Mixing Python and shell
 
@@ -328,8 +335,8 @@ kernel/
   shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
 
 bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
-  ls.py, ps.py, pwd.py, cd.py, cp.py, mv.py, vi.py — filesystem / process utilities
-  sysinfo.py, netstat.py                        — system / network status
+  ls.py, ps.py, pwd.py, cd.py, cp.py, mv.py, ftp.py, vi.py — filesystem / transfer utilities
+  sysinfo.py, netstat.py                                  — system / network status
 
 examples/          frozen runnable demos, also seeded as readable source in /examples
   ascii_graphics.py, tone.py, recv_file.py, send_file.py, mini_vi.py

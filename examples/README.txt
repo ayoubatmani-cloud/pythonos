@@ -9,12 +9,15 @@ Run these from the kernel shell:
 File transfer:
 
   Inbound to PythonOS:
-    run('/examples/recv_file.py')
-    host: printf hello | nc localhost 7000
+    ftp get /tmp/inbox.txt
+    host: nc localhost 7000 < local-file.txt
 
   Outbound from PythonOS:
-    host: nc -l 7001 > pythonos-example.txt
-    run('/examples/send_file.py')
+    host: nc -l 7001 > from-pythonos.txt
+    ftp put /tmp/inbox.txt
+
+The recv_file.py and send_file.py examples show the lower-level TCP APIs
+used by the ftp command.
 
 The examples are frozen as Python modules and their source is seeded into
 TmpFS so they remain readable at /examples.

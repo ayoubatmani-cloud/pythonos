@@ -20,13 +20,14 @@ import time
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
+FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "7000"))
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 
 QEMU_CMD = [
     "qemu-system-x86_64",
     "-machine", "q35", "-cpu", "qemu64", "-m", "512M",
-    "-netdev", f"user,id=net0,hostfwd=tcp::{HOST_PORT}-:5000",
+    "-netdev", f"user,id=net0,hostfwd=tcp::{HOST_PORT}-:5000,hostfwd=tcp::{FILE_HOST_PORT}-:7000",
     "-device", "virtio-net-pci,netdev=net0",
     "-device", "intel-hda", "-device", "hda-duplex",
     "-no-reboot", "-no-shutdown",
@@ -46,8 +47,12 @@ TEST_CASES = [
     ("run('/bin/sysinfo.py')\n",        "PythonOS"),
     ("run('/bin/netstat.py')\n",        "Interface"),
     ("sh('ps')\n",                      "kshell"),
-    ("ls /bin\n",                       "vi.py"),
+    ("ls /bin\n",                       "ftp.py"),
+    ("ftp\n",                           "usage: ftp get DST"),
     ("ls /examples\n",                  "mini_vi.py"),
+]
+
+POST_FILE_COPY_TEST_CASES = [
     ("run('/examples/ascii_graphics.py')\n", "ASCII graphics demo"),
 ]
 
@@ -171,6 +176,22 @@ def run() -> int:
                     print(f"       got: {response!r}")
                     failed += 1
 
+            if run_file_copy_test(sock):
+                passed += 1
+            else:
+                failed += 1
+
+            for expr, expected in POST_FILE_COPY_TEST_CASES:
+                sock.sendall(expr.encode())
+                response = recv_until_prompt(sock)
+                if expected in response:
+                    print(f"[PASS] {expr.strip()!r:45s} → found {expected!r}")
+                    passed += 1
+                else:
+                    print(f"[FAIL] {expr.strip()!r:45s} → expected {expected!r}")
+                    print(f"       got: {response!r}")
+                    failed += 1
+
             print(f"\n[smoke] {passed} passed, {failed} failed")
             if failed:
                 _print_serial(serial_log.name)
@@ -180,6 +201,76 @@ def run() -> int:
             sock.close()
     finally:
         _cleanup()
+
+
+def run_file_copy_test(sock: socket.socket) -> bool:
+    payload = b"hello from host via ftp\n"
+    target = "/tmp/ftp-in.txt"
+
+    sock.sendall(("ftp get " + target + "\n").encode())
+    response = recv_until_prompt(
+        sock,
+        prompt=b"ftp: waiting for one incoming file stream",
+    )
+    if "ftp: waiting for one incoming file stream" not in response:
+        print("[FAIL] 'ftp get' did not start listening")
+        print(f"       got: {response!r}")
+        return False
+
+    try:
+        with socket.create_connection(("127.0.0.1", FILE_HOST_PORT), timeout=5) as data_sock:
+            data_sock.sendall(payload)
+    except OSError as e:
+        print(f"[FAIL] host could not connect to ftp get port {FILE_HOST_PORT}: {e}")
+        return False
+
+    response += recv_until_prompt(sock)
+    expected = "ftp: saved " + str(len(payload)) + " bytes to " + target
+    if expected not in response:
+        print("[FAIL] 'ftp get' did not save expected bytes")
+        print(f"       expected: {expected!r}")
+        print(f"       got: {response!r}")
+        return False
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(10)
+    put_port = listener.getsockname()[1]
+
+    received = b""
+    try:
+        sock.sendall(("ftp put " + target + " 10.0.2.2 " + str(put_port) + "\n").encode())
+        conn, _ = listener.accept()
+        conn.settimeout(10)
+        try:
+            while len(received) < len(payload):
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+        finally:
+            conn.close()
+    except OSError as e:
+        print(f"[FAIL] host could not receive ftp put data: {e}")
+        return False
+    finally:
+        listener.close()
+
+    response = recv_until_prompt(sock)
+    if received != payload:
+        print("[FAIL] 'ftp put' returned different bytes")
+        print(f"       expected: {payload!r}")
+        print(f"       got: {received!r}")
+        return False
+    if "ftp: sent " + str(len(payload)) + " bytes from " + target not in response:
+        print("[FAIL] 'ftp put' did not report expected send")
+        print(f"       got: {response!r}")
+        return False
+
+    print("[PASS] 'ftp get/put file copy'                   → round-trip bytes matched")
+    return True
 
 
 def _print_serial(path: str) -> None:

@@ -43,6 +43,10 @@ SCRIPTS = {
         "from kernel import commands\n"
         "await commands.mv(argv, cwd, _write)\n"
     ),
+    "ftp.py": (
+        "from kernel import commands\n"
+        "await commands.ftp(argv, cwd, _write)\n"
+    ),
     "vi.py": (
         "from kernel import commands\n"
         "await commands.vi(argv, cwd, _write)\n"
@@ -140,8 +144,121 @@ async def mv(argv: list[str], cwd: str, write) -> None:
         return
     src = _abspath(argv[0], cwd)
     dst = _abspath(argv[1], cwd)
+    if src == dst:
+        return
     await _write_all(dst, await _read_all(src))
     await vfs.unlink(src)
+
+
+def _ftp_usage(write) -> None:
+    _line(write, "usage: ftp get DST [PORT]")
+    _line(write, "       ftp put SRC [HOST] [PORT]")
+    _line(write, "       ftp recv DST [PORT]")
+    _line(write, "       ftp send SRC [HOST] [PORT]")
+    _line(write, "get/recv: listen for one TCP stream and save it to DST")
+    _line(write, "put/send: connect to HOST:PORT and send SRC")
+    _line(write, "defaults: PORT=7000 for get, HOST=10.0.2.2 PORT=7001 for put")
+
+
+def _parse_port(value: str, write):
+    try:
+        port = int(value)
+    except ValueError:
+        _line(write, "ftp: invalid port: " + value)
+        return None
+    if port < 1 or port > 65535:
+        _line(write, "ftp: port out of range: " + value)
+        return None
+    return port
+
+
+async def _ftp_get(path: str, port: int, write) -> None:
+    from kernel.net import stack
+    from kernel.net.tcp import tcp
+
+    fd = await vfs.open(path, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
+    conn = None
+    listener = await tcp.listen(port)
+    _line(write, "ftp: listening on " + ip_str(stack.local_ip) + ":" + str(port))
+    _line(write, "ftp: waiting for one incoming file stream")
+
+    total = 0
+    try:
+        conn = await listener.accept()
+        while True:
+            chunk = await conn.recv(1024)
+            if not chunk:
+                break
+            await vfs.write(fd, chunk)
+            total += len(chunk)
+    finally:
+        vfs.close(fd)
+        if conn is not None:
+            conn.close()
+
+    _line(write, "ftp: saved " + str(total) + " bytes to " + path)
+
+
+async def _ftp_put(path: str, host: str, port: int, write) -> None:
+    from kernel.net.tcp import tcp
+
+    fd = await vfs.open(path)
+    conn = None
+    _line(write, "ftp: connecting to " + host + ":" + str(port))
+    total = 0
+    try:
+        conn = await tcp.connect(host, port)
+        while True:
+            chunk = await vfs.read(fd, 1024)
+            if not chunk:
+                break
+            await conn.send(chunk)
+            total += len(chunk)
+    finally:
+        vfs.close(fd)
+        if conn is not None:
+            conn.close()
+
+    _line(write, "ftp: sent " + str(total) + " bytes from " + path)
+
+
+async def ftp(argv: list[str], cwd: str, write) -> None:
+    if not argv or argv[0] in ("help", "-h", "--help"):
+        _ftp_usage(write)
+        return
+
+    op = argv[0]
+    if op in ("get", "recv"):
+        if len(argv) < 2 or len(argv) > 3:
+            _ftp_usage(write)
+            return
+        path = _abspath(argv[1], cwd)
+        port = 7000
+        if len(argv) == 3:
+            parsed = _parse_port(argv[2], write)
+            if parsed is None:
+                return
+            port = parsed
+        await _ftp_get(path, port, write)
+        return
+
+    if op in ("put", "send"):
+        if len(argv) < 2 or len(argv) > 4:
+            _ftp_usage(write)
+            return
+        path = _abspath(argv[1], cwd)
+        host = argv[2] if len(argv) >= 3 else "10.0.2.2"
+        port = 7001
+        if len(argv) == 4:
+            parsed = _parse_port(argv[3], write)
+            if parsed is None:
+                return
+            port = parsed
+        await _ftp_put(path, host, port, write)
+        return
+
+    _line(write, "ftp: unknown operation: " + op)
+    _ftp_usage(write)
 
 
 async def vi(argv: list[str], cwd: str, write, read_char=None) -> None:

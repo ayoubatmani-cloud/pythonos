@@ -114,10 +114,16 @@ class TCPConnection:
             self.snd_seq = (self.snd_seq + max(len(payload), 1)) & 0xFFFFFFFF
 
     async def recv(self, n: int = 4096) -> bytes:
-        while not self.rcv_buf:
+        while True:
+            if self.rcv_buf:
+                break
             if self.state in (TCPState.CLOSE_WAIT, TCPState.CLOSED):
                 return b""
             self._rx_event.clear()
+            if self.rcv_buf:
+                break
+            if self.state in (TCPState.CLOSE_WAIT, TCPState.CLOSED):
+                return b""
             await self._rx_event.wait()
         data = bytes(self.rcv_buf[:n])
         del self.rcv_buf[:n]
@@ -188,7 +194,7 @@ class TCPListener:
             conn.state = TCPState.CLOSED
             log.info(f"tcp: SYN-ACK timeout for :{conn.remote_port}")
             return
-        if conn.state == TCPState.ESTABLISHED:
+        if conn.state in (TCPState.ESTABLISHED, TCPState.CLOSE_WAIT):
             log.info(f"tcp: connection established with :{conn.remote_port}")
             await self._queue.put(conn)
 
