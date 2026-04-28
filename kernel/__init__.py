@@ -109,6 +109,12 @@ async def _kernel_main(
         console = None
         log.info("kernel: no framebuffer — serial only")
 
+    def _write(text: str) -> None:
+        if console:
+            console.write(text)
+        else:
+            log._serial_raw(text)
+
     # ── Keyboard / serial input ────────────────────────────────────────────
     if _ARCH == 'x86_64':
         from kernel.drivers.input import com1
@@ -139,6 +145,7 @@ async def _kernel_main(
         from kernel.net import repl_server
         scheduler.spawn(repl_server.start(), name="repl-server")
         log.info("kernel: TCP REPL server starting (nc localhost 5555)")
+        _write("TCP REPL ready — connect: nc localhost 5555\n")
 
     # ── Sound (x86_64 only — Intel HDA is not present on arm64 virt) ──────
     if _ARCH == 'x86_64':
@@ -164,12 +171,6 @@ async def _kernel_main(
 
     # ── Shell ──────────────────────────────────────────────────────────────
     from kernel.shell import Shell
-
-    def _write(text: str) -> None:
-        if console:
-            console.write(text)
-        else:
-            log._serial_raw(text)
 
     shell = Shell(read_char=keyboard.read_char, write=_write)
     scheduler.spawn(shell.run(), name="kshell")

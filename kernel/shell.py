@@ -54,7 +54,7 @@ class Shell:
             "display":   display,
             "help":      lambda: self._help(),
             "ps":        lambda: self._ps(),
-            "ls":        lambda path="/": asyncio.ensure_future(self._ls(path)),
+            "ls":        lambda path="/": self._ls(path),
             "clear":     lambda: self._clear(),
         }
         return ns
@@ -146,17 +146,19 @@ class Shell:
 
     def _help(self) -> None:
         self._write(
-            "\nKernel shell built-ins:\n"
-            "  ps()          — list kernel processes\n"
-            "  ls(path)      — list directory\n"
-            "  clear()       — clear console\n"
-            "  pci           — PCI bus (iterate, .find_by_class())\n"
-            "  scheduler     — kernel scheduler\n"
-            "  vfs           — virtual filesystem\n"
-            "  display       — framebuffer / console\n"
-            "  net           — network stack (net.tcp.connect, net.local_ip)\n"
-            "  sound         — HDA sound (sound.hda.generate_tone, .write_pcm)\n"
-            "\nAll kernel objects are live — changes take effect immediately.\n\n"
+            "\nShell commands:\n"
+            "  help()              — this message\n"
+            "  ps()               — list kernel tasks\n"
+            "  ls()  ls('/proc')  — list directory\n"
+            "  clear()            — clear framebuffer console\n"
+            "\nLive kernel objects (use as variables, not functions):\n"
+            "  pci        — PCI bus: list(pci), pci.find_by_class(0x0200)\n"
+            "  scheduler  — task scheduler: scheduler.ps()\n"
+            "  vfs        — filesystem: await vfs.readdir('/')\n"
+            "  display    — framebuffer / console\n"
+            "  net        — network: net.local_ip, await net.tcp.connect(ip, port)\n"
+            "  sound      — HDA audio: sound.hda.generate_tone(freq, ms)\n"
+            "\nAll objects are live — mutations take effect immediately.\n\n"
         )
 
     def _ps(self) -> None:

@@ -99,16 +99,20 @@ class VFS:
     # ── Path resolution ───────────────────────────────────────────────────────
 
     async def _resolve(self, path: str) -> FSNode:
-        pure = PurePosixPath(path)
-        # Find deepest mount point that is a prefix of path
+        # Normalize to /foo/bar (no trailing slash except for root)
+        s = "/" + path.strip("/")
         for mount_path, fs in self._mounts:
-            mp = PurePosixPath(mount_path)
-            try:
-                rel = pure.relative_to(mp)
-            except ValueError:
+            mp = mount_path   # stored as rstrip("/") or "/"
+            if mp == "/":
+                rel_parts = [p for p in s[1:].split("/") if p]
+            elif s == mp:
+                rel_parts = []
+            elif s.startswith(mp + "/"):
+                rel_parts = [p for p in s[len(mp) + 1:].split("/") if p]
+            else:
                 continue
             node = fs.root()
-            for part in rel.parts:
+            for part in rel_parts:
                 node = await node.lookup(part)
             return node
         raise FileNotFoundError(f"No filesystem mounted for {path!r}")

@@ -32,7 +32,7 @@ class Console:
     def rows(self) -> int: return self._rows
 
     def write(self, text: str) -> None:
-        log._serial(text)  # mirror to serial
+        log._serial_raw(text)  # mirror to serial (raw — no added newline)
         for ch in text:
             if ch == '\n':
                 self._newline()
