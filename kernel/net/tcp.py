@@ -130,6 +130,9 @@ class TCPConnection:
         if self.state == TCPState.ESTABLISHED:
             asyncio.ensure_future(self.send_segment(F_FIN | F_ACK))
             self.state = TCPState.FIN_WAIT_1
+        elif self.state == TCPState.CLOSE_WAIT:
+            asyncio.ensure_future(self.send_segment(F_FIN | F_ACK))
+            self.state = TCPState.LAST_ACK
 
     def handle_segment(self, seg: TCPSegment) -> None:
         if self.state == TCPState.SYN_RCVD:
@@ -172,13 +175,21 @@ class TCPListener:
         return await self._queue.get()
 
     async def _on_syn(self, conn: TCPConnection) -> None:
-        await conn.send_segment(F_SYN | F_ACK)
+        log.info(f"tcp: sending SYN-ACK to :{conn.remote_port}")
+        try:
+            await conn.send_segment(F_SYN | F_ACK)
+        except Exception as e:
+            import traceback as _tb
+            log.info(f"tcp: send_segment raised: {e}\n{_tb.format_exc()}")
+            return
         try:
             await asyncio.wait_for(conn._accept_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
             conn.state = TCPState.CLOSED
+            log.info(f"tcp: SYN-ACK timeout for :{conn.remote_port}")
             return
         if conn.state == TCPState.ESTABLISHED:
+            log.info(f"tcp: connection established with :{conn.remote_port}")
             await self._queue.put(conn)
 
 
@@ -227,12 +238,14 @@ class TCPStack:
         key = (pkt.dst, seg.dst_port, pkt.src, seg.src_port)
         conn = self._connections.get(key)
         if conn:
+            log.info(f"tcp: seg to :{seg.src_port} state={conn.state.name} flags={seg.flags:#04x} seq={seg.seq} ack={seg.ack}")
             conn.handle_segment(seg)
             return
         # Incoming SYN to a listening port — start three-way handshake
-        if seg.flags == F_SYN:
+        if seg.flags & F_SYN and not (seg.flags & F_ACK):
             listener = self._listeners.get(seg.dst_port)
             if listener:
+                log.info(f"tcp: SYN on port {seg.dst_port} from :{seg.src_port}")
                 conn = TCPConnection(
                     local_ip=pkt.dst,
                     remote_ip=pkt.src,

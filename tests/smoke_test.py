@@ -121,15 +121,37 @@ def run() -> int:
             _print_serial(serial_log.name)
             return 1
 
-        sock = socket.create_connection(("127.0.0.1", HOST_PORT), timeout=5)
-        try:
-            banner = recv_until_prompt(sock)
-            if ">>>" not in banner:
-                print(f"[FAIL] No shell prompt in banner: {banner!r}")
-                _print_serial(serial_log.name)
-                return 1
-            print(f"[smoke] Connected — shell prompt received.")
+        sock = None
+        banner = ""
+        for attempt in range(1, 4):
+            try:
+                s = socket.create_connection(("127.0.0.1", HOST_PORT), timeout=5)
+            except OSError as e:
+                print(f"[smoke] connect attempt {attempt}: {e}; retrying...")
+                time.sleep(1.0)
+                continue
+            try:
+                b = recv_until_prompt(s)
+                if ">>>" in b:
+                    sock = s
+                    banner = b
+                    break
+                s.close()
+            except Exception:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+            print(f"[smoke] attempt {attempt}: no prompt yet, retrying in 1s...")
+            time.sleep(1.0)
 
+        if sock is None:
+            print(f"[FAIL] No shell prompt after 3 connection attempts")
+            _print_serial(serial_log.name)
+            return 1
+
+        print(f"[smoke] Connected — shell prompt received.")
+        try:
             passed = 0
             failed = 0
             for expr, expected in TEST_CASES:

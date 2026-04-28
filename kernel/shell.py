@@ -97,6 +97,7 @@ class Shell:
 
         src = self._block
         self._block = ""
+        src = self._fixup_source(src)
 
         try:
             # Try as expression first (so we can print the value)
@@ -116,6 +117,18 @@ class Shell:
             self._write(traceback.format_exc())
 
         self._write(self.PROMPT)
+
+    @staticmethod
+    def _fixup_source(src: str) -> str:
+        """Rewrite 'is [not] None/True/False' → '==/!= None/True/False'.
+
+        The frozen Python 3.14 kernel fails to compile these forms; the
+        equality equivalents work correctly for singleton constants.
+        """
+        for kw in ('None', 'True', 'False'):
+            src = src.replace(f'is not {kw}', f'!= {kw}')
+            src = src.replace(f'is {kw}', f'== {kw}')
+        return src
 
     @staticmethod
     def _is_incomplete(src: str) -> bool:

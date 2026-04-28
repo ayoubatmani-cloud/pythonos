@@ -279,12 +279,16 @@ extern void *calloc(size_t n, size_t size);
 static PyObject *py_dma_alloc(PyObject *self, PyObject *args) {
     unsigned long long size;
     if (!PyArg_ParseTuple(args, "K", &size)) return NULL;
-    void *ptr = calloc(1, (size_t)size);
-    if (!ptr) {
+    /* VirtIO queues must be page-aligned (pfn = ptr >> 12 must satisfy ptr == pfn*4096).
+     * Allocate an extra page so we can round up to the next 4096-byte boundary.
+     * The wasted prefix bytes are never returned; no free() so no leak concern. */
+    char *raw = (char *)calloc(1, (size_t)size + 4096);
+    if (!raw) {
         PyErr_NoMemory();
         return NULL;
     }
-    return PyLong_FromUnsignedLongLong((unsigned long long)(uintptr_t)ptr);
+    uintptr_t aligned = ((uintptr_t)raw + 4095) & ~(uintptr_t)4095;
+    return PyLong_FromUnsignedLongLong((unsigned long long)aligned);
 }
 
 // ── Module definition ─────────────────────────────────────────────────────────

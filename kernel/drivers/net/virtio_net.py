@@ -181,7 +181,7 @@ class Virtqueue:
 
 # ── VirtIO-net packet header ──────────────────────────────────────────────────
 
-VIRTIO_NET_HDR_SIZE = 12   # legacy header
+VIRTIO_NET_HDR_SIZE = 10   # legacy header: flags,gso_type,hdr_len,gso_size,csum_start,csum_offset
 
 def make_net_header() -> bytes:
     # flags=0, gso_type=0, hdr_len=0, gso_size=0, csum_start=0, csum_offset=0
@@ -238,7 +238,9 @@ class VirtIONetDriver:
         regs.set_queue_select(idx)
         n = min(regs.queue_size, QUEUE_SIZE)
         import _hal
-        phys = _hal.dma_alloc(2 * PAGE_SIZE)
+        # desc(4096) + avail(518) pad-to-page → used starts at 8192;
+        # used ring = 6 + n*8 = 2054 bytes → total 10246 → need 3 pages
+        phys = _hal.dma_alloc(3 * PAGE_SIZE)
         q = Virtqueue(n, phys)
         regs.set_queue_addr(q.pfn)
         return q
@@ -247,8 +249,11 @@ class VirtIONetDriver:
         if not self._rxq:
             return
         import _hal
+        first_phys = None
         for _ in range(self._rxq.n // 2):
             phys = _hal.dma_alloc(1526)   # max Ethernet frame + virtio header
+            if first_phys is None:
+                first_phys = phys
             idx = self._rxq.alloc_desc()
             self._rxq._desc_bufs[idx] = (phys, 1526)  # record for later read-back
             desc = VirtqDesc(
@@ -259,12 +264,15 @@ class VirtIONetDriver:
             )
             self._rxq.write_desc(idx, desc)
             self._rxq.avail_push(idx)
+        log.info(f"virtio-net: filled {self._rxq.n // 2} RX bufs, first_buf={first_phys:#x}, "
+                 f"avail_idx={self._rxq._avail_idx}")
         if self._regs:
             self._regs.set_queue_notify(0)
 
     async def send(self, frame: bytes) -> None:
         """Transmit an Ethernet frame."""
         if not self._txq or not self._regs:
+            log.info("tx: no txq/regs — drop")
             return
         import _hal
         payload = make_net_header() + frame

@@ -17,6 +17,8 @@ def inet_cksum(data: bytes) -> int:
         s = (s & 0xFFFF) + (s >> 16)
     return ~s & 0xFFFF
 
+_ip_id = 0   # module-level packet ID counter (can't be a slot on frozen dataclass)
+
 @dataclass(frozen=True, slots=True)
 class IPv4Packet:
     src:      bytes   # 4 bytes
@@ -26,8 +28,6 @@ class IPv4Packet:
     payload:  bytes
     tos:      int = 0
     flags:    int = 0x4000  # Don't Fragment
-
-    _id_counter: int = 0
 
     @classmethod
     def decode(cls, raw: bytes) -> "IPv4Packet":
@@ -42,12 +42,13 @@ class IPv4Packet:
                    payload=raw[ihl:total_len], tos=tos, flags=flags_frag)
 
     def encode(self) -> bytes:
-        IPv4Packet._id_counter = (IPv4Packet._id_counter + 1) & 0xFFFF
+        global _ip_id
+        _ip_id = (_ip_id + 1) & 0xFFFF
         header = struct.pack(">BBHHHBBH4s4s",
             0x45,               # version=4, IHL=5 (20 bytes)
             self.tos,
             20 + len(self.payload),
-            IPv4Packet._id_counter,
+            _ip_id,
             self.flags,
             self.ttl,
             self.proto,

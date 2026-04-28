@@ -4,7 +4,8 @@
 # GNU make prefers GNUMakefile over Makefile, so on systems where
 # 'make' is already GNU make this file is never read.
 
-GMAKE ?= gmake
+# Prefer gmake (Homebrew GNU make) if present; fall back to make (GNU make 3.81 on macOS)
+GMAKE ?= $(if $(shell which gmake 2>/dev/null),gmake,make)
 
 .PHONY: all
 all:
