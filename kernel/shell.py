@@ -77,7 +77,7 @@ class Shell:
             "display":   display,
             "help":      lambda: self._help(),
             "clear":     lambda: self._clear(),
-            "sh":        lambda cmd: self._sh(cmd),
+            "sh":        lambda cmd=None: self._sh(cmd),
             "run":       lambda path: self._run(path),
             "print":     lambda *args, sep=" ", end="\n":
                              self._write(sep.join(str(a) for a in args) + end),
@@ -216,8 +216,11 @@ class Shell:
 
         return True
 
-    async def _sh(self, cmd: str) -> None:
-        """Programmatic shell dispatch: sh('ls /tmp'), sh('cp src dst'), …"""
+    async def _sh(self, cmd=None) -> None:
+        """sh() → interactive sub-shell.  sh('cmd args') → dispatch to /bin/."""
+        if cmd is None:
+            await self._sh_repl()
+            return
         parts = cmd.strip().split()
         if not parts:
             return
@@ -225,6 +228,34 @@ class Shell:
         args = parts[1:]
         if not await self._run_script("/bin/" + name + ".py", args):
             self._write("sh: " + name + ": command not found\n")
+
+    async def _sh_repl(self) -> None:
+        """Interactive sub-shell: $ prompt, command dispatch, 'exit' to return."""
+        SH = "$ "
+        self._write(SH)
+        buf = ""
+        while True:
+            ch = await self._read()
+            if ch == '\n':
+                self._write('\n')
+                line = buf.strip()
+                buf = ""
+                if line == 'exit':
+                    return
+                if line:
+                    parts = line.split()
+                    name  = parts[0]
+                    args  = parts[1:]
+                    if not await self._run_script("/bin/" + name + ".py", args):
+                        self._write("sh: " + name + ": command not found\n")
+                self._write(SH)
+            elif ch == '\b' or ord(ch) == 127:
+                if buf:
+                    buf = buf[:-1]
+                    self._write('\b \b')
+            else:
+                buf += ch
+                self._write(ch)
 
     async def _run(self, path: str) -> None:
         """run('/full/path/to/script.py') — execute any VFS file by absolute path."""
