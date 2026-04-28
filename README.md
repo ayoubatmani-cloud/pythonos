@@ -53,18 +53,133 @@ nc localhost 5556
 
 Each connection gets an independent kernel shell with access to all live kernel objects. Multiple sessions can run simultaneously — this is the point: Python is the kernel, and concurrency is `asyncio`, not fork/exec.
 
-```python
+```
 PythonOS kernel shell
-Python 3.14.0
-Type 'help' for kernel commands.
+Python 3.14.0a0
+Type 'help' for help.  Commands: ls  ps  pwd  cd  sysinfo  netstat
 
 >>> 1 + 1
 2
->>> scheduler.ps()
-[Process(name='kshell', ...), Process(name='repl:...',  ...)]
->>> vfs.ls("/")
-['dev', 'tmp', 'proc', 'sys', 'bin']
+>>> sysinfo
+PythonOS
+Scheduler: 3 tasks
+cwd: /
+>>> ls /bin
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  sysinfo.py  netstat.py
+>>> cd /tmp
+>>> pwd
+/tmp
+>>> sh()
+$ sysinfo
+PythonOS
+Scheduler: 3 tasks
+cwd: /tmp
+$ ls
+.  ..
+$ exit
 >>> import kernel.log as log; log.info("hello from REPL")
+```
+
+### Unix-like shell experience
+
+The kernel shell offers a Unix-like command experience nested inside the Python REPL. The two modes coexist without friction.
+
+#### Bare-word command dispatch
+
+Any bare identifier typed at `>>>` that is not already a Python name is looked up as `/bin/<name>.py` and executed automatically. No `run()`, no quotes, no `.py` extension needed:
+
+```
+>>> ls
+>>> ls /bin
+>>> ps
+>>> pwd
+>>> cd /tmp
+>>> sysinfo
+>>> netstat
+```
+
+Arguments are split on whitespace and passed to the script as `argv`:
+
+```
+>>> cp /bin/sysinfo.py /tmp/my_sysinfo.py
+>>> mv /tmp/my_sysinfo.py /tmp/sysinfo_backup.py
+```
+
+#### Built-in commands
+
+| Command | Description |
+|---|---|
+| `ls [path]` | List directory (default: current working directory) |
+| `ps` | List kernel tasks with PID, name, state |
+| `pwd` | Print current working directory |
+| `cd [path]` | Change directory (supports `..`, relative paths; default: `/`) |
+| `cp SRC DST` | Copy a file |
+| `mv SRC DST` | Move / rename a file |
+| `sysinfo` | System overview |
+| `netstat` | Network interface status |
+
+#### Shell sub-REPL: `sh()`
+
+Calling `sh()` with no arguments drops into an interactive shell with a `$ ` prompt. It dispatches the same `/bin/*.py` commands and shares `cwd` state with the parent session. Type `exit` to return to `>>>`:
+
+```
+>>> sh()
+$ ls /bin
+.  ..  ls.py  ps.py  pwd.py  cd.py  cp.py  mv.py  sysinfo.py  netstat.py
+$ cd /tmp
+$ pwd
+/tmp
+$ exit
+>>> cwd        # cwd change is visible back in Python
+'/tmp'
+```
+
+`sh('cmd args')` is the single-shot form for scripted use:
+
+```python
+>>> sh('cp /bin/sysinfo.py /tmp/backup.py')
+>>> sh('ls /tmp')
+```
+
+#### Writing your own commands
+
+Any `.py` file placed in `/bin/` becomes a shell command automatically. Scripts run inside the kernel namespace — `vfs`, `scheduler`, `pci`, `net`, `OpenFlags`, and `print` are pre-bound. Top-level `await` is supported so scripts can call async VFS operations directly:
+
+```python
+# /bin/mycommand.py
+# Invoked by typing: mycommand arg1 arg2
+path = argv[0] if argv else cwd
+entries = await vfs.readdir(path)
+for e in entries:
+    print(e)
+```
+
+`argv` is a list of string arguments. `cwd` is the current working directory string; a script can update it (`cwd = '/new/path'`) and the shell propagates the change back.
+
+Create a new command at runtime:
+
+```python
+>>> fd = await vfs.open('/bin/hello.py', OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
+>>> await vfs.write(fd, b"print('hello, ' + (argv[0] if argv else 'world'))\n")
+>>> vfs.close(fd)
+>>> hello
+hello, world
+>>> hello PythonOS
+hello, PythonOS
+```
+
+#### Mixing Python and shell
+
+The two modes are additive. Anything that is a valid Python expression or statement still goes through the Python interpreter. The shell dispatch only fires for bare identifiers that are not already in the Python namespace:
+
+```
+>>> ls                        # shell dispatch → /bin/ls.py
+>>> list(pci)                 # Python expression → PCI device list
+>>> for d in pci: print(d)    # Python statement → loop over PCI bus
+>>> sh()                      # enter shell sub-REPL
+$ ps                          # shell command
+$ exit                        # return to >>>
+>>> scheduler.ps()            # back to Python
 ```
 
 ### Serial shell
@@ -178,9 +293,13 @@ kernel/
     tcp.py           TCP state machine (connect + listen/accept)
     stack.py         Network stack init, ARP/IP dispatch
     repl_server.py   Multi-session TCP REPL server (port 5000)
-  fs/                VFS + tmpfs
+  fs/                VFS (POSIX-like fd table, CREAT/TRUNC, async protocol) + tmpfs
   scheduler.py       asyncio task scheduler (ps, spawn)
-  shell.py           interactive Python kernel shell
+  shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
+
+bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
+  ls.py, ps.py, pwd.py, cd.py, cp.py, mv.py   — filesystem / process utilities
+  sysinfo.py, netstat.py                        — system / network status
   display/           framebuffer + bitmap font console
   log.py             serial logging via _hal (arch-aware: COM1 / PL011)
 
