@@ -52,7 +52,7 @@ class Shell:
             "sound":     sound,
             "scheduler": scheduler,
             "display":   display,
-            "help":      self._help,
+            "help":      lambda: self._help(),
             "ps":        lambda: self._ps(),
             "ls":        lambda path="/": asyncio.ensure_future(self._ls(path)),
             "clear":     lambda: self._clear(),
