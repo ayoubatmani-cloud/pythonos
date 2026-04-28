@@ -47,7 +47,9 @@ TEST_CASES = [
     ("run('/bin/sysinfo.py')\n",        "PythonOS"),
     ("run('/bin/netstat.py')\n",        "Interface"),
     ("sh('ps')\n",                      "kshell"),
+    ("sh('/bin/sysinfo.py')\n",          "PythonOS"),
     ("ls /bin\n",                       "ftp.py"),
+    ("cat /examples/README.txt\n",      "PythonOS examples"),
     ("ftp\n",                           "usage: ftp get DST"),
     ("ftp get /tmp/repl-port.txt 5000\n", "ftp: port already in use: 5000"),
     ("ls /examples\n",                  "mini_vi.py"),
@@ -166,6 +168,18 @@ def run() -> int:
         try:
             passed = 0
             failed = 0
+            for label, expected in [
+                ("banner lists cat", "Commands: ls ps pwd cd cat"),
+                ("banner lists sh()", "Helpers: sh()"),
+            ]:
+                if expected in banner:
+                    print(f"[PASS] {label:45s} → found {expected!r}")
+                    passed += 1
+                else:
+                    print(f"[FAIL] {label:45s} → expected {expected!r}")
+                    print(f"       got: {banner!r}")
+                    failed += 1
+
             for expr, expected in TEST_CASES:
                 sock.sendall(expr.encode())
                 response = recv_until_prompt(sock)

@@ -35,6 +35,10 @@ SCRIPTS = {
         "from kernel import commands\n"
         "cwd = await commands.cd(argv, cwd, _write)\n"
     ),
+    "cat.py": (
+        "from kernel import commands\n"
+        "await commands.cat(argv, cwd, _write)\n"
+    ),
     "cp.py": (
         "from kernel import commands\n"
         "await commands.cp(argv, cwd, _write)\n"
@@ -109,6 +113,32 @@ async def cd(argv: list[str], cwd: str, write) -> str:
     target = _abspath(argv[0], cwd) if argv else "/"
     await vfs.readdir(target)
     return target
+
+
+async def cat(argv: list[str], cwd: str, write) -> None:
+    if not argv:
+        _line(write, "usage: cat FILE [...]")
+        return
+
+    for arg in argv:
+        path = _abspath(arg, cwd)
+        fd = None
+        try:
+            fd = await vfs.open(path)
+            while True:
+                chunk = await vfs.read(fd, 1024)
+                if not chunk:
+                    break
+                write(chunk.decode("utf-8", errors="replace"))
+        except FileNotFoundError:
+            _line(write, "cat: " + path + ": not found")
+        except IsADirectoryError:
+            _line(write, "cat: " + path + ": is a directory")
+        except Exception as e:
+            _line(write, "cat: " + path + ": " + str(e))
+        finally:
+            if fd is not None:
+                vfs.close(fd)
 
 
 async def _read_all(path: str) -> bytes:

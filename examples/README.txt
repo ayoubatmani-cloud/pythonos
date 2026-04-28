@@ -3,8 +3,10 @@ PythonOS examples
 Run these from the kernel shell:
 
   run('/examples/ascii_graphics.py')
+  sh('/examples/ascii_graphics.py')
   run('/examples/tone.py')
   run('/examples/mini_vi.py')
+  cat /examples/README.txt
 
 File transfer:
 

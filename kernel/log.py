@@ -10,6 +10,8 @@ import _hal   # direct C extension — no circular import risk
 
 _PREFIX = "[PythonOS] "
 _ARCH = getattr(_hal, 'ARCH', 'x86_64')
+_SERIAL_WIDTH = 80
+_serial_col = 0
 
 def info(msg: str) -> None:
     _serial(f"{_PREFIX}INFO  {msg}")
@@ -50,15 +52,39 @@ else:
 
 def _serial(line: str) -> None:
     """Output a log line followed by \\r\\n (for structured log messages)."""
-    for ch in line:
-        _putc(ord(ch))
-    _putc(0x0D)
-    _putc(0x0A)
+    _serial_raw(line)
+    _serial_newline()
 
 
 def _serial_raw(text: str) -> None:
-    """Output text verbatim, translating \\n → \\r\\n (for interactive shell I/O)."""
+    """Output text to serial, translating \\n and wrapping at 80 columns."""
+    global _serial_col
     for ch in text:
         if ch == '\n':
+            _serial_newline()
+            continue
+        if ch == '\r':
             _putc(0x0D)
+            _serial_col = 0
+            continue
+        if ch == '\b':
+            _putc(0x08)
+            if _serial_col > 0:
+                _serial_col -= 1
+            continue
+
+        if _SERIAL_WIDTH > 0 and _serial_col >= _SERIAL_WIDTH:
+            _serial_newline()
+
         _putc(ord(ch))
+        if ch == '\t':
+            _serial_col += 4 - (_serial_col % 4)
+        elif ord(ch) >= 0x20:
+            _serial_col += 1
+
+
+def _serial_newline() -> None:
+    global _serial_col
+    _putc(0x0D)
+    _putc(0x0A)
+    _serial_col = 0

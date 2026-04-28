@@ -91,7 +91,9 @@ class Shell:
     async def run(self) -> None:
         self._write("\nPythonOS kernel shell\n")
         self._write("Python " + __import__('sys').version + "\n")
-        self._write("Type 'help' for help.  Commands: ls  ps  pwd  cd  cp  mv  ftp  vi  sysinfo  netstat\n\n")
+        self._write("Type 'help' for help.\n")
+        self._write("Commands: ls ps pwd cd cat cp mv ftp vi sysinfo netstat\n")
+        self._write("Helpers: sh()  sh('cmd args')  run('/path')  clear()\n\n")
         self._write(self.PROMPT)
 
         while True:
@@ -288,10 +290,7 @@ class Shell:
         parts = cmd.strip().split()
         if not parts:
             return
-        name = parts[0]
-        args = parts[1:]
-        if not await self._run_script("/bin/" + name + ".py", args):
-            self._write("sh: " + name + ": command not found\n")
+        await self._run_sh_parts(parts)
 
     async def _sh_repl(self) -> None:
         """Interactive sub-shell: $ prompt, command dispatch, 'exit' to return."""
@@ -308,10 +307,7 @@ class Shell:
                     return
                 if line:
                     parts = line.split()
-                    name  = parts[0]
-                    args  = parts[1:]
-                    if not await self._run_script("/bin/" + name + ".py", args):
-                        self._write("sh: " + name + ": command not found\n")
+                    await self._run_sh_parts(parts)
                 self._write(SH)
             elif ch == '\b' or ord(ch) == 127:
                 if buf:
@@ -320,6 +316,36 @@ class Shell:
             else:
                 buf += ch
                 self._write(ch)
+
+    async def _run_sh_parts(self, parts: list[str]) -> None:
+        name = parts[0]
+        args = parts[1:]
+
+        path = self._sh_script_path(name)
+        if path is not None:
+            if not await self._run_script(path, args):
+                self._write("sh: " + name + ": not found\n")
+            return
+
+        if not await self._run_script("/bin/" + name + ".py", args):
+            self._write("sh: " + name + ": command not found\n")
+
+    def _sh_script_path(self, name: str) -> str | None:
+        if "/" not in name or not name.endswith(".py"):
+            return None
+        if name.startswith("/"):
+            target = name
+        else:
+            target = self._cwd.rstrip("/") + "/" + name
+
+        parts = []
+        for seg in target.split("/"):
+            if seg == "..":
+                if parts:
+                    parts.pop()
+            elif seg and seg != ".":
+                parts.append(seg)
+        return "/" + "/".join(parts)
 
     async def _run(self, path: str) -> None:
         """run('/full/path/to/script.py') — execute any VFS file by absolute path."""
@@ -361,6 +387,7 @@ class Shell:
             "  ps             — kernel task list\n"
             "  pwd            — print working directory\n"
             "  cd [path]      — change directory\n"
+            "  cat FILE [...] — print file contents\n"
             "  cp SRC DST     — copy file\n"
             "  mv SRC DST     — move / rename file\n"
             "  ftp get/put    — copy files over TCP\n"
@@ -369,7 +396,9 @@ class Shell:
             "  netstat        — network status\n"
             "  clear()        — clear framebuffer console\n"
             "  run('/path')   — run script by absolute path\n"
+            "  sh()           — enter shell sub-REPL\n"
             "  sh('cmd args') — same, with shell-style argument splitting\n"
+            "  /path/file.py  — in sh(), run a Python file directly\n"
             "\nLive kernel objects:\n"
             "  pci        — PCI bus: list(pci), pci.find_by_class(0x0200)\n"
             "  scheduler  — task scheduler: scheduler.ps()\n"
