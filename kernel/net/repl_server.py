@@ -62,6 +62,5 @@ async def _session(conn) -> None:
     finally:
         conn.close()
         from kernel.net.tcp import tcp
-        key = (conn.local_ip, conn.local_port, conn.remote_ip, conn.remote_port)
-        tcp._connections.pop(key, None)
+        tcp.remove_connection(conn)
         log.info(f"repl: session on port {conn.remote_port} closed")

@@ -17,9 +17,13 @@ ARCH       := x86_64
 ISO_OUT    := pythonos.iso
 DOCKER_IMG := pythonos-builder
 LIBPYTHON  := deps/cpython/libpython3.14.a
+REPL_HOST_PORT ?= $(if $(PYTHONOS_HOST_PORT),$(PYTHONOS_HOST_PORT),5555)
+FILE_HOST_PORT ?= $(if $(PYTHONOS_FILE_PORT),$(PYTHONOS_FILE_PORT),17000)
+ARM64_REPL_HOST_PORT ?= 5556
+ARM64_FILE_HOST_PORT ?= 17002
 
 QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
-              -netdev user,id=net0,hostfwd=tcp::5555-:5000,hostfwd=tcp::7000-:7000 -device virtio-net-pci,netdev=net0 \
+              -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
               -cdrom $(ISO_OUT) -boot d -nographic -serial mon:stdio
@@ -43,7 +47,7 @@ stop:
 restart: stop start
 
 test: $(ISO_OUT)
-	python3 tests/smoke_test.py $(ISO_OUT)
+	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) python3 tests/smoke_test.py $(ISO_OUT)
 
 clean:
 	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
@@ -226,7 +230,7 @@ LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
 QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 512M \
                     -no-reboot -no-shutdown \
                     -nographic -serial mon:stdio \
-                    -netdev user,id=net1,hostfwd=tcp::5556-:5000,hostfwd=tcp::7002-:7000 -device virtio-net-device,netdev=net1
+                    -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img
 

@@ -176,27 +176,40 @@ async def _ftp_get(path: str, port: int, write) -> None:
     from kernel.net import stack
     from kernel.net.tcp import tcp
 
-    fd = await vfs.open(path, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
+    fd = None
     conn = None
+    listener = None
     listener = await tcp.listen(port)
+    total = 0
+    saved = False
+
     _line(write, "ftp: listening on " + ip_str(stack.local_ip) + ":" + str(port))
     _line(write, "ftp: waiting for one incoming file stream")
 
-    total = 0
     try:
         conn = await listener.accept()
+        listener.close()
+        listener = None
+
+        fd = await vfs.open(path, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
         while True:
             chunk = await conn.recv(1024)
             if not chunk:
                 break
             await vfs.write(fd, chunk)
             total += len(chunk)
+        saved = True
     finally:
-        vfs.close(fd)
+        if fd is not None:
+            vfs.close(fd)
         if conn is not None:
             conn.close()
+            tcp.remove_connection(conn)
+        if listener is not None:
+            listener.close()
 
-    _line(write, "ftp: saved " + str(total) + " bytes to " + path)
+    if saved:
+        _line(write, "ftp: saved " + str(total) + " bytes to " + path)
 
 
 async def _ftp_put(path: str, host: str, port: int, write) -> None:
@@ -218,8 +231,23 @@ async def _ftp_put(path: str, host: str, port: int, write) -> None:
         vfs.close(fd)
         if conn is not None:
             conn.close()
+            tcp.remove_connection(conn)
 
     _line(write, "ftp: sent " + str(total) + " bytes from " + path)
+
+
+async def _run_ftp_get(path: str, port: int, write) -> None:
+    try:
+        await _ftp_get(path, port, write)
+    except OSError as e:
+        _line(write, "ftp: " + str(e))
+
+
+async def _run_ftp_put(path: str, host: str, port: int, write) -> None:
+    try:
+        await _ftp_put(path, host, port, write)
+    except OSError as e:
+        _line(write, "ftp: " + str(e))
 
 
 async def ftp(argv: list[str], cwd: str, write) -> None:
@@ -239,7 +267,7 @@ async def ftp(argv: list[str], cwd: str, write) -> None:
             if parsed is None:
                 return
             port = parsed
-        await _ftp_get(path, port, write)
+        await _run_ftp_get(path, port, write)
         return
 
     if op in ("put", "send"):
@@ -254,7 +282,7 @@ async def ftp(argv: list[str], cwd: str, write) -> None:
             if parsed is None:
                 return
             port = parsed
-        await _ftp_put(path, host, port, write)
+        await _run_ftp_put(path, host, port, write)
         return
 
     _line(write, "ftp: unknown operation: " + op)

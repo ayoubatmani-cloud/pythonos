@@ -20,7 +20,7 @@ import time
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
-FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "7000"))
+FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "17000"))
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 
@@ -49,6 +49,7 @@ TEST_CASES = [
     ("sh('ps')\n",                      "kshell"),
     ("ls /bin\n",                       "ftp.py"),
     ("ftp\n",                           "usage: ftp get DST"),
+    ("ftp get /tmp/repl-port.txt 5000\n", "ftp: port already in use: 5000"),
     ("ls /examples\n",                  "mini_vi.py"),
 ]
 
@@ -207,6 +208,18 @@ def run_file_copy_test(sock: socket.socket) -> bool:
     payload = b"hello from host via ftp\n"
     target = "/tmp/ftp-in.txt"
 
+    if not run_ftp_get_once(sock, target, payload):
+        return False
+    if not run_ftp_get_once(sock, "/tmp/ftp-in-2.txt", b"second ftp get\n"):
+        return False
+    if not run_ftp_put_once(sock, target, payload):
+        return False
+
+    print("[PASS] 'ftp get/put file copy'                   → round-trip bytes matched")
+    return True
+
+
+def run_ftp_get_once(sock: socket.socket, target: str, payload: bytes) -> bool:
     sock.sendall(("ftp get " + target + "\n").encode())
     response = recv_until_prompt(
         sock,
@@ -232,6 +245,10 @@ def run_file_copy_test(sock: socket.socket) -> bool:
         print(f"       got: {response!r}")
         return False
 
+    return True
+
+
+def run_ftp_put_once(sock: socket.socket, target: str, payload: bytes) -> bool:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
@@ -269,7 +286,6 @@ def run_file_copy_test(sock: socket.socket) -> bool:
         print(f"       got: {response!r}")
         return False
 
-    print("[PASS] 'ftp get/put file copy'                   → round-trip bytes matched")
     return True
 
 

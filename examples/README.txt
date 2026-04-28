@@ -10,7 +10,7 @@ File transfer:
 
   Inbound to PythonOS:
     ftp get /tmp/inbox.txt
-    host: nc localhost 7000 < local-file.txt
+    host: nc localhost 17000 < local-file.txt
 
   Outbound from PythonOS:
     host: nc -l 7001 > from-pythonos.txt

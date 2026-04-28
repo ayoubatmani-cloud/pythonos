@@ -189,17 +189,20 @@ README.txt  ascii_graphics.py  tone.py  recv_file.py  send_file.py  mini_vi.py
 The `ftp` command provides a small FTP-like file copy workflow over one raw TCP stream. It is not the RFC FTP protocol; it is a simple get/put tool built for the PythonOS shell and TmpFS:
 
 ```
-# inbound to PythonOS; make run forwards host localhost:7000 to guest port 7000
+# inbound to PythonOS; make run forwards host localhost:17000 to guest port 7000
 >>> ftp get /tmp/inbox.txt
 # host terminal:
-$ nc localhost 7000 < local-file.txt
-# run-arm64 forwards host localhost:7002 to guest port 7000
+$ nc localhost 17000 < local-file.txt
+# run-arm64 forwards host localhost:17002 to guest port 7000
 
 # outbound from PythonOS to the QEMU host at 10.0.2.2
 # host terminal:
 $ nc -l 7001 > from-pythonos.txt
 >>> ftp put /tmp/inbox.txt
 ```
+
+Use `FILE_HOST_PORT=<port> make run` if you need a different host-side
+forwarded port.
 
 The older file-transfer examples are still available as readable source at `/examples/recv_file.py` and `/examples/send_file.py`.
 

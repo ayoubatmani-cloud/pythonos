@@ -173,12 +173,17 @@ class TCPConnection:
 class TCPListener:
     """Server-side listener returned by tcp.listen(port)."""
 
-    def __init__(self) -> None:
+    def __init__(self, stack, port: int) -> None:
+        self._stack = stack
+        self.port = port
         self._queue: asyncio.Queue = asyncio.Queue()
 
     async def accept(self) -> TCPConnection:
         """Wait for the next completed incoming connection."""
         return await self._queue.get()
+
+    def close(self) -> None:
+        self._stack.unlisten(self.port, self)
 
     async def _on_syn(self, conn: TCPConnection) -> None:
         log.info(f"tcp: sending SYN-ACK to :{conn.remote_port}")
@@ -187,12 +192,14 @@ class TCPListener:
         except Exception as e:
             import traceback as _tb
             log.info(f"tcp: send_segment raised: {e}\n{_tb.format_exc()}")
+            self._stack.remove_connection(conn)
             return
         try:
             await asyncio.wait_for(conn._accept_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
             conn.state = TCPState.CLOSED
             log.info(f"tcp: SYN-ACK timeout for :{conn.remote_port}")
+            self._stack.remove_connection(conn)
             return
         if conn.state in (TCPState.ESTABLISHED, TCPState.CLOSE_WAIT):
             log.info(f"tcp: connection established with :{conn.remote_port}")
@@ -225,15 +232,30 @@ class TCPStack:
         key = (local_ip, local_port, remote_ip, remote_port)
         self._connections[key] = conn
 
-        await conn.send_segment(F_SYN)
-        await asyncio.wait_for(conn._connected, timeout=10.0)
+        try:
+            await conn.send_segment(F_SYN)
+            await asyncio.wait_for(conn._connected, timeout=10.0)
+        except Exception:
+            self._connections.pop(key, None)
+            raise
         return conn
 
     async def listen(self, port: int) -> TCPListener:
         """Start listening on *port*; return a TCPListener for accept()."""
-        listener = TCPListener()
+        if port in self._listeners:
+            raise OSError("port already in use: " + str(port))
+        listener = TCPListener(self, port)
         self._listeners[port] = listener
         return listener
+
+    def unlisten(self, port: int, listener: TCPListener | None = None) -> None:
+        current = self._listeners.get(port)
+        if current is not None and (listener is None or current is listener):
+            self._listeners.pop(port, None)
+
+    def remove_connection(self, conn: TCPConnection) -> None:
+        key = (conn.local_ip, conn.local_port, conn.remote_ip, conn.remote_port)
+        self._connections.pop(key, None)
 
     def handle_ip_packet(self, pkt: IPv4Packet) -> None:
         if pkt.proto != PROTO_TCP:
