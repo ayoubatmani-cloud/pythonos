@@ -1,13 +1,6 @@
-"""Play a short melody through the HDA audio driver when available."""
+"""Generate a tiny PCM tone buffer for the HDA audio driver when available."""
 
-import asyncio
-import kernel.sound.hda as hda_mod
-
-
-MELODY = [
-    (330, 120), (392, 120), (494, 120), (660, 180),
-    (494, 120), (392, 120), (330, 220),
-]
+import kernel.sound as sound
 
 
 def _line(write, text=""):
@@ -17,25 +10,29 @@ def _line(write, text=""):
         print(text)
 
 
-async def _play_pcm(hda, pcm):
-    offset = 0
-    while offset < len(pcm):
-        written = hda.write_pcm(pcm[offset:])
-        if written <= 0:
-            await asyncio.sleep(0.02)
-        else:
-            offset += written
-            await asyncio.sleep(0.018)
+def _square_tone(freq=440, ms=2):
+    frames = sound.SAMPLE_RATE * ms // 1000
+    half_period = max(1, sound.SAMPLE_RATE // (freq * 2))
+    out = bytearray(frames * sound.CHANNELS * 2)
+    for i in range(frames):
+        sample = 12000 if (i // half_period) % 2 == 0 else -12000
+        lo = sample & 0xFF
+        hi = (sample >> 8) & 0xFF
+        off = i * 4
+        out[off] = lo
+        out[off + 1] = hi
+        out[off + 2] = lo
+        out[off + 3] = hi
+    return bytes(out)
 
 
 async def main(argv=None, cwd="/", read_char=None, write=None):
-    hda = hda_mod.hda
+    hda = sound.hda
     if hda is None:
         _line(write, "No HDA device is available on this machine.")
         return
 
-    _line(write, "Playing PythonOS melody through Intel HDA.")
-    for freq, ms in MELODY:
-        await _play_pcm(hda, hda.generate_tone(freq, ms))
+    pcm = _square_tone()
+    _line(write, "Generated PythonOS tone buffer for Intel HDA.")
+    _line(write, str(len(pcm)) + " PCM bytes ready")
     _line(write, "done")
-

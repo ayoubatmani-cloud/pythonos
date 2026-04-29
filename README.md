@@ -57,7 +57,7 @@ Each connection gets an independent kernel shell with access to all live kernel 
 PythonOS kernel shell
 Python 3.14.0a0
 Type 'help' for help.
-Commands: ls ps pwd cd cat cp mv ftp vi sysinfo netstat
+Commands: ls ps pwd cd cat cp mv ftp ed sysinfo netstat
 Helpers: sh()  sh('cmd args')  run('/path')  clear()
 
 >>> 1 + 1
@@ -67,7 +67,7 @@ PythonOS
 Scheduler: 3 tasks
 cwd: /
 >>> ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  vi.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  ed.py  sysinfo.py  netstat.py
 >>> cd /tmp
 >>> pwd
 /tmp
@@ -97,7 +97,7 @@ Any bare identifier typed at `>>>` that is not already a Python name is looked u
 >>> pwd
 >>> cd /tmp
 >>> cat /examples/README.txt
->>> vi /tmp/notes.txt
+>>> ed /tmp/notes.txt
 >>> sysinfo
 >>> netstat
 ```
@@ -124,7 +124,7 @@ Arguments are split on whitespace and passed to the script as `argv`:
 | `mv SRC DST` | Move / rename a file |
 | `ftp get DST [PORT]` | Receive one TCP file stream into TmpFS |
 | `ftp put SRC [HOST] [PORT]` | Send one TmpFS file over TCP |
-| `vi [path]` | Small Python line editor |
+| `ed [path]` | ed-style line editor |
 | `sysinfo` | System overview |
 | `netstat` | Network interface status |
 
@@ -135,11 +135,11 @@ Calling `sh()` with no arguments drops into an interactive shell with a `$ ` pro
 ```
 >>> sh()
 $ ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  vi.py  sysinfo.py  netstat.py
+.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  ed.py  sysinfo.py  netstat.py
 $ cd /tmp
 $ pwd
 /tmp
-$ /examples/ascii_graphics.py
+$ /examples/tone.py
 $ exit
 >>> cwd        # cwd change is visible back in Python
 '/tmp'
@@ -153,7 +153,7 @@ executables in PythonOS.
 ```python
 >>> sh('cp /bin/sysinfo.py /tmp/backup.py')
 >>> sh('ls /tmp')
->>> sh('/examples/ascii_graphics.py')
+>>> sh('/examples/tone.py')
 ```
 
 #### Writing your own commands
@@ -189,11 +189,20 @@ PythonOS also seeds `/examples` with readable Python programs that are frozen in
 
 ```
 >>> ls /examples
-README.txt  ascii_graphics.py  tone.py  recv_file.py  send_file.py  mini_vi.py
->>> run('/examples/ascii_graphics.py')
+README.txt  async_tasks.py  hello_kernel.py  primes.py  recv_file.py  send_file.py  tone.py  vfs_demo.py
+>>> run('/examples/hello_kernel.py')
+>>> run('/examples/vfs_demo.py')
+>>> run('/examples/async_tasks.py')
+>>> sh('/examples/primes.py 100')
 >>> run('/examples/tone.py')
->>> vi /tmp/notes.txt
 ```
+
+The smaller examples cover shell arguments, scheduler/VFS inspection, TmpFS
+read/write, cooperative asyncio tasks, and pure-Python computation.
+
+The `ed` command is backed by `kernel.ed`, a line-oriented editor inspired by
+`py_ed`. It supports append/insert/change/delete, print/number/literal print,
+marks, move/copy, read/write/write-append, one-level undo, and `q`/`Q`.
 
 The `ftp` command provides a small FTP-like file copy workflow over one raw TCP stream. It is not the RFC FTP protocol; it is a simple get/put tool built for the PythonOS shell and TmpFS:
 
@@ -343,15 +352,17 @@ kernel/
     stack.py         Network stack init, ARP/IP dispatch
     repl_server.py   Multi-session TCP REPL server (port 5000)
   fs/                VFS (POSIX-like fd table, CREAT/TRUNC, async protocol) + tmpfs
+  ed.py              ed-style line editor used by /bin/ed.py
   scheduler.py       asyncio task scheduler (ps, spawn)
   shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
 
 bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
-  ls.py, ps.py, pwd.py, cd.py, cat.py, cp.py, mv.py, ftp.py, vi.py — filesystem / transfer utilities
+  ls.py, ps.py, pwd.py, cd.py, cat.py, cp.py, mv.py, ftp.py, ed.py — filesystem / transfer utilities
   sysinfo.py, netstat.py                                  — system / network status
 
 examples/          frozen runnable demos, also seeded as readable source in /examples
-  ascii_graphics.py, tone.py, recv_file.py, send_file.py, mini_vi.py
+  hello_kernel.py, vfs_demo.py, async_tasks.py, primes.py, tone.py,
+  recv_file.py, send_file.py
 
 asyncio/             bare-metal asyncio (no socket/selectors): Future, Task,
                      Queue, Event, Lock, Semaphore, sleep, wait_for, gather

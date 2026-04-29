@@ -22,7 +22,7 @@ FILE_HOST_PORT ?= $(if $(PYTHONOS_FILE_PORT),$(PYTHONOS_FILE_PORT),17000)
 ARM64_REPL_HOST_PORT ?= 5556
 ARM64_FILE_HOST_PORT ?= 17002
 
-QEMU_FLAGS := -machine q35 -cpu qemu64 -m 512M \
+QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G \
               -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
@@ -227,7 +227,7 @@ _iso: $(KERNEL_ELF)
 ARM64_ELF        := pythonos-arm64.elf
 LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
 
-QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 512M \
+QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 2G \
                     -no-reboot -no-shutdown \
                     -nographic -serial mon:stdio \
                     -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1

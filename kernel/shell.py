@@ -92,7 +92,7 @@ class Shell:
         self._write("\nPythonOS kernel shell\n")
         self._write("Python " + __import__('sys').version + "\n")
         self._write("Type 'help' for help.\n")
-        self._write("Commands: ls ps pwd cd cat cp mv ftp vi sysinfo netstat\n")
+        self._write("Commands: ls ps pwd cd cat cp mv ftp ed sysinfo netstat\n")
         self._write("Helpers: sh()  sh('cmd args')  run('/path')  clear()\n\n")
         self._write(self.PROMPT)
 
@@ -236,7 +236,7 @@ class Shell:
                 func = getattr(commands, name[:-3], None)
                 if func is None:
                     return False
-                if name == "vi.py":
+                if name == "ed.py":
                     result = func(args, self._cwd, self._write, self._read)
                 else:
                     result = func(args, self._cwd, self._write)
@@ -391,7 +391,7 @@ class Shell:
             "  cp SRC DST     — copy file\n"
             "  mv SRC DST     — move / rename file\n"
             "  ftp get/put    — copy files over TCP\n"
-            "  vi [path]      — small Python line editor\n"
+            "  ed [path]      — ed-style line editor\n"
             "  sysinfo        — system overview\n"
             "  netstat        — network status\n"
             "  clear()        — clear framebuffer console\n"

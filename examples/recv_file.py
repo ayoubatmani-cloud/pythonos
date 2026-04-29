@@ -24,25 +24,30 @@ async def main(argv=None, cwd="/", read_char=None, write=None):
     port = int(argv[0]) if argv else 7000
     out_path = _abspath(argv[1], cwd) if len(argv) > 1 else "/tmp/inbox.bin"
 
-    listener = await tcp.listen(port)
     _line(write, "Receiving one file on " + ip_str(stack.local_ip) + ":" + str(port))
-    _line(write, "Host example: printf hello | nc localhost 7000")
+    _line(write, "Host example with make run: printf hello | nc localhost 17000")
     _line(write, "Saving to " + out_path)
 
-    conn = await listener.accept()
+    listener = await tcp.listen(port)
+    conn = None
     chunks = []
     total = 0
-    while True:
-        chunk = await conn.recv(1024)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-        _line(write, "received " + str(total) + " bytes")
-    conn.close()
+    try:
+        conn = await listener.accept()
+        while True:
+            chunk = await conn.recv(1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            _line(write, "received " + str(total) + " bytes")
+    finally:
+        if conn is not None:
+            conn.close()
+            tcp.remove_connection(conn)
+        listener.close()
 
     fd = await vfs.open(out_path, OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
     await vfs.write(fd, b"".join(chunks))
     vfs.close(fd)
     _line(write, "saved " + str(total) + " bytes")
-

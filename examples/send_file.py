@@ -25,17 +25,22 @@ async def main(argv=None, cwd="/", read_char=None, write=None):
 
     _line(write, "Connecting to " + host + ":" + str(port))
     _line(write, "Host example: nc -l 7001 > pythonos-example.txt")
-    conn = await tcp.connect(host, port)
-
-    fd = await vfs.open(path)
     total = 0
-    while True:
-        chunk = await vfs.read(fd, 1024)
-        if not chunk:
-            break
-        await conn.send(chunk)
-        total += len(chunk)
-    vfs.close(fd)
-    conn.close()
+    conn = None
+    fd = None
+    try:
+        conn = await tcp.connect(host, port)
+        fd = await vfs.open(path)
+        while True:
+            chunk = await vfs.read(fd, 1024)
+            if not chunk:
+                break
+            await conn.send(chunk)
+            total += len(chunk)
+    finally:
+        if fd is not None:
+            vfs.close(fd)
+        if conn is not None:
+            conn.close()
+            tcp.remove_connection(conn)
     _line(write, "sent " + str(total) + " bytes from " + path)
-

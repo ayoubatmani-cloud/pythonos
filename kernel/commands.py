@@ -51,9 +51,9 @@ SCRIPTS = {
         "from kernel import commands\n"
         "await commands.ftp(argv, cwd, _write)\n"
     ),
-    "vi.py": (
+    "ed.py": (
         "from kernel import commands\n"
-        "await commands.vi(argv, cwd, _write)\n"
+        "await commands.ed(argv, cwd, _write)\n"
     ),
 }
 
@@ -319,6 +319,7 @@ async def ftp(argv: list[str], cwd: str, write) -> None:
     _ftp_usage(write)
 
 
-async def vi(argv: list[str], cwd: str, write, read_char=None) -> None:
-    from examples import mini_vi
-    await mini_vi.main(argv=argv, cwd=cwd, read_char=read_char, write=write)
+async def ed(argv: list[str], cwd: str, write, read_char=None) -> None:
+    from kernel.ed import run as _ed_run
+
+    await _ed_run(argv, cwd, write, read_char)

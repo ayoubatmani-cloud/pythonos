@@ -169,6 +169,7 @@ async def _kernel_main(
                         if isinstance(getattr(dev, 'driver', None), _hda_mod.HDADriver)), None)
         if hda_dev:
             _hda_mod.hda = hda_dev
+            _sys.modules['kernel.sound'].hda = hda_dev
             log.info("kernel: HDA sound ready")
     else:
         log.info("kernel: skipping HDA sound (arm64)")

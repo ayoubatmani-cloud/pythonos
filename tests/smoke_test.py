@@ -26,7 +26,7 @@ RECV_TIMEOUT = 15.0    # per-response timeout
 
 QEMU_CMD = [
     "qemu-system-x86_64",
-    "-machine", "q35", "-cpu", "qemu64", "-m", "512M",
+    "-machine", "q35", "-cpu", "qemu64", "-m", "2G",
     "-netdev", f"user,id=net0,hostfwd=tcp::{HOST_PORT}-:5000,hostfwd=tcp::{FILE_HOST_PORT}-:7000",
     "-device", "virtio-net-pci,netdev=net0",
     "-device", "intel-hda", "-device", "hda-duplex",
@@ -48,15 +48,12 @@ TEST_CASES = [
     ("run('/bin/netstat.py')\n",        "Interface"),
     ("sh('ps')\n",                      "kshell"),
     ("sh('/bin/sysinfo.py')\n",          "PythonOS"),
-    ("ls /bin\n",                       "ftp.py"),
+    ("ls /bin\n",                       "ed.py"),
     ("cat /examples/README.txt\n",      "PythonOS examples"),
     ("ftp\n",                           "usage: ftp get DST"),
     ("ftp get /tmp/repl-port.txt 5000\n", "ftp: port already in use: 5000"),
-    ("ls /examples\n",                  "mini_vi.py"),
-]
-
-POST_FILE_COPY_TEST_CASES = [
-    ("run('/examples/ascii_graphics.py')\n", "ASCII graphics demo"),
+    ("ls /examples\n",                  "hello_kernel.py"),
+    ("vi\n",                            "NameError"),
 ]
 
 
@@ -196,16 +193,14 @@ def run() -> int:
             else:
                 failed += 1
 
-            for expr, expected in POST_FILE_COPY_TEST_CASES:
-                sock.sendall(expr.encode())
-                response = recv_until_prompt(sock)
-                if expected in response:
-                    print(f"[PASS] {expr.strip()!r:45s} → found {expected!r}")
-                    passed += 1
-                else:
-                    print(f"[FAIL] {expr.strip()!r:45s} → expected {expected!r}")
-                    print(f"       got: {response!r}")
-                    failed += 1
+            if run_ed_editor_test(sock):
+                passed += 1
+            else:
+                failed += 1
+
+            example_passed, example_failed = run_example_tests(sock)
+            passed += example_passed
+            failed += example_failed
 
             print(f"\n[smoke] {passed} passed, {failed} failed")
             if failed:
@@ -230,6 +225,193 @@ def run_file_copy_test(sock: socket.socket) -> bool:
         return False
 
     print("[PASS] 'ftp get/put file copy'                   → round-trip bytes matched")
+    return True
+
+
+def run_ed_editor_test(sock: socket.socket) -> bool:
+    target = "/tmp/ed-test.txt"
+    script = (
+        "ed -s " + target + "\n"
+        "a\n"
+        "alpha\n"
+        "beta\n"
+        ".\n"
+        ",p\n"
+        "1,2n\n"
+        "w\n"
+        "Q\n"
+    )
+
+    sock.sendall(script.encode())
+    response = recv_until_prompt(sock)
+    if "alpha" not in response or "beta" not in response or "2\tbeta" not in response:
+        print("[FAIL] 'ed append/print/write' did not show expected buffer output")
+        print(f"       got: {response!r}")
+        return False
+
+    sock.sendall(("cat " + target + "\n").encode())
+    response = recv_until_prompt(sock)
+    if "alpha" not in response or "beta" not in response:
+        print("[FAIL] 'ed append/print/write' did not save expected file content")
+        print(f"       got: {response!r}")
+        return False
+
+    print("[PASS] 'ed append/print/write'                  → file content matched")
+    return True
+
+
+def run_example_tests(sock: socket.socket) -> tuple[int, int]:
+    passed = 0
+    failed = 0
+    for runner in (
+        run_hello_kernel_example,
+        run_vfs_demo_example,
+        run_async_tasks_example,
+        run_primes_example,
+        run_recv_file_example,
+        run_send_file_example,
+        run_tone_example,
+    ):
+        if runner(sock):
+            passed += 1
+        else:
+            failed += 1
+    return passed, failed
+
+
+def run_simple_example(sock: socket.socket, expr: str, expected_markers: tuple[str, ...]) -> bool:
+    sock.sendall(expr.encode())
+    response = recv_until_prompt(sock)
+    missing = [marker for marker in expected_markers if marker not in response]
+    if not missing and ">>>" in response:
+        print(f"[PASS] {expr.strip()!r:45s} -> found example markers")
+        return True
+
+    print(f"[FAIL] {expr.strip()!r:45s} -> missing {missing!r}")
+    print(f"       got: {response!r}")
+    return False
+
+
+def run_hello_kernel_example(sock: socket.socket) -> bool:
+    return run_simple_example(
+        sock,
+        "run('/examples/hello_kernel.py')\n",
+        ("Hello, PythonOS!", "root entries:", "tasks:"),
+    )
+
+
+def run_vfs_demo_example(sock: socket.socket) -> bool:
+    return run_simple_example(
+        sock,
+        "run('/examples/vfs_demo.py')\n",
+        ("VFS demo wrote", "read back:", "PythonOS VFS demo"),
+    )
+
+
+def run_async_tasks_example(sock: socket.socket) -> bool:
+    return run_simple_example(
+        sock,
+        "run('/examples/async_tasks.py')\n",
+        ("async queue demo", "producer sent: 4", "consumer total: 10"),
+    )
+
+
+def run_primes_example(sock: socket.socket) -> bool:
+    return run_simple_example(
+        sock,
+        "sh('/examples/primes.py 30')\n",
+        ("Prime numbers up to 30", "found 10 primes"),
+    )
+
+
+def run_tone_example(sock: socket.socket) -> bool:
+    expr = "run('/examples/tone.py')\n"
+    sock.sendall(expr.encode())
+    response = recv_until_prompt(sock)
+    expected = (
+        "Generated PythonOS tone buffer",
+        "No HDA device is available",
+    )
+    for marker in expected:
+        if marker in response and ">>>" in response:
+            print(f"[PASS] {expr.strip()!r:45s} → found {marker!r}")
+            return True
+
+    print(f"[FAIL] {expr.strip()!r:45s} → expected a completed tone example status")
+    print(f"       got: {response!r}")
+    return False
+
+
+def run_recv_file_example(sock: socket.socket) -> bool:
+    payload = b"hello from recv_file example\n"
+    target = "/tmp/example-recv.txt"
+    expr = "sh('/examples/recv_file.py 7000 " + target + "')\n"
+
+    sock.sendall(expr.encode())
+    response = recv_until_prompt(sock, prompt=b"Saving to ")
+    if "Receiving one file" not in response:
+        print(f"[FAIL] {expr.strip()!r:45s} → recv_file did not start listening")
+        print(f"       got: {response!r}")
+        return False
+
+    try:
+        with socket.create_connection(("127.0.0.1", FILE_HOST_PORT), timeout=5) as data_sock:
+            data_sock.sendall(payload)
+    except OSError as e:
+        print(f"[FAIL] {expr.strip()!r:45s} → host could not connect: {e}")
+        return False
+
+    response += recv_until_prompt(sock)
+    expected = "saved " + str(len(payload)) + " bytes"
+    if expected in response:
+        print(f"[PASS] {expr.strip()!r:45s} → found {expected!r}")
+        return True
+
+    print(f"[FAIL] {expr.strip()!r:45s} → expected {expected!r}")
+    print(f"       got: {response!r}")
+    return False
+
+
+def run_send_file_example(sock: socket.socket) -> bool:
+    source = "/examples/README.txt"
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(10)
+    put_port = listener.getsockname()[1]
+    expr = "sh('/examples/send_file.py 10.0.2.2 " + str(put_port) + " " + source + "')\n"
+
+    received = b""
+    try:
+        sock.sendall(expr.encode())
+        conn, _ = listener.accept()
+        conn.settimeout(10)
+        try:
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+        finally:
+            conn.close()
+    except OSError as e:
+        print(f"[FAIL] {expr.strip()!r:45s} → host could not receive data: {e}")
+        return False
+    finally:
+        listener.close()
+
+    response = recv_until_prompt(sock)
+    if b"PythonOS examples" not in received:
+        print(f"[FAIL] {expr.strip()!r:45s} → received unexpected bytes")
+        print(f"       got: {received!r}")
+        return False
+    if "sent " not in response or " bytes from " + source not in response:
+        print(f"[FAIL] {expr.strip()!r:45s} → send_file did not report expected send")
+        print(f"       got: {response!r}")
+        return False
+
+    print(f"[PASS] {expr.strip()!r:45s} → README bytes received")
     return True
 
 
