@@ -414,6 +414,134 @@ static PyObject *py_pthread_selftest(PyObject *self, PyObject *args) {
     );
 }
 
+// Exercises the pthread attr / condattr surface that PythonOS exposes for
+// source-compatibility, plus a non-NULL-attr pthread_create + join. CPython
+// itself does not call into the attr path on PythonOS (see
+// docs/pthread-attr-coverage.md), so this helper exists to keep that
+// surface verified independently.
+static PyObject *py_pthread_attr_selftest(PyObject *self, PyObject *args) {
+    int cases = 0;
+    const char *fail = NULL;
+
+    do {
+        // attr_init / destroy round-trip with valid pointers.
+        pthread_attr_t attrs;
+        if (pthread_attr_init(&attrs) != 0) { fail = "attr_init"; break; }
+        cases++;
+        if (pthread_attr_destroy(&attrs) != 0) { fail = "attr_destroy"; break; }
+        cases++;
+
+        // attr_init rejects NULL.
+        if (pthread_attr_init(NULL) != EINVAL) { fail = "attr_init(NULL) accepted"; break; }
+        cases++;
+
+        // detachstate accepts known values.
+        if (pthread_attr_init(&attrs) != 0) { fail = "attr_init/2"; break; }
+        if (pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE) != 0) {
+            fail = "setdetachstate(JOINABLE)"; break;
+        }
+        cases++;
+        if (pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_DETACHED) != 0) {
+            fail = "setdetachstate(DETACHED)"; break;
+        }
+        cases++;
+        if (pthread_attr_setdetachstate(&attrs, 99) != EINVAL) {
+            fail = "setdetachstate(99) accepted"; break;
+        }
+        cases++;
+
+        // stacksize: under 32 KiB rejected, valid round-trips through getter.
+        if (pthread_attr_setstacksize(&attrs, 1024) != EINVAL) {
+            fail = "setstacksize(1024) accepted"; break;
+        }
+        cases++;
+        if (pthread_attr_setstacksize(&attrs, 131072) != 0) {
+            fail = "setstacksize(131072)"; break;
+        }
+        cases++;
+        size_t got = 0;
+        if (pthread_attr_getstacksize(&attrs, &got) != 0 || got != 131072) {
+            fail = "getstacksize round-trip"; break;
+        }
+        cases++;
+        if (pthread_attr_getstacksize(NULL, &got) != EINVAL) {
+            fail = "getstacksize(NULL,&) accepted"; break;
+        }
+        cases++;
+        if (pthread_attr_getstacksize(&attrs, NULL) != EINVAL) {
+            fail = "getstacksize(&,NULL) accepted"; break;
+        }
+        cases++;
+
+        // Non-NULL-attr pthread_create + join, exercising the path CPython
+        // *would* use if THREAD_STACK_SIZE were defined.
+        if (pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE) != 0) {
+            fail = "setdetachstate(JOINABLE)/2"; break;
+        }
+        static volatile uint64_t attr_marker;
+        attr_marker = 0;
+        pthread_t tid;
+#ifdef ARCH_ARM64
+        // arm64 returns ENOSYS from pthread_create; skip create/join cases.
+        (void)tid;
+        (void)attr_marker;
+        cases++;
+#else
+        if (pthread_create(&tid, &attrs, pthread_selftest_worker,
+                           (void *)&attr_marker) != 0) {
+            fail = "create with attr"; break;
+        }
+        cases++;
+        void *retval = NULL;
+        if (pthread_join(tid, &retval) != 0) {
+            fail = "join with attr"; break;
+        }
+        cases++;
+        if (attr_marker != 123456789ULL || (uintptr_t)retval != 0x1234ULL) {
+            fail = "attr worker marker"; break;
+        }
+        cases++;
+#endif
+        if (pthread_attr_destroy(&attrs) != 0) { fail = "attr_destroy/2"; break; }
+        cases++;
+
+        // condattr surface is no-op stubs in our build (CONDATTR_MONOTONIC
+        // is not defined). Verify the calls succeed and accept the
+        // documented clock values.
+        pthread_condattr_t ca;
+        if (pthread_condattr_init(&ca) != 0) { fail = "condattr_init"; break; }
+        cases++;
+        // Accepts CLOCK_REALTIME and CLOCK_MONOTONIC silently (stub).
+        if (pthread_condattr_setclock(&ca, CLOCK_REALTIME) != 0) {
+            fail = "condattr_setclock(REALTIME)"; break;
+        }
+        cases++;
+        if (pthread_condattr_setclock(&ca, CLOCK_MONOTONIC) != 0) {
+            fail = "condattr_setclock(MONOTONIC)"; break;
+        }
+        cases++;
+        if (pthread_condattr_destroy(&ca) != 0) { fail = "condattr_destroy"; break; }
+        cases++;
+
+        // Mutex attr surface (used by CPython for PyThread_type_lock mutex
+        // init via NULL attr; settype is called in some paths).
+        pthread_mutexattr_t ma;
+        if (pthread_mutexattr_init(&ma) != 0) { fail = "mutexattr_init"; break; }
+        cases++;
+        if (pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_NORMAL) != 0) {
+            fail = "mutexattr_settype"; break;
+        }
+        cases++;
+        if (pthread_mutexattr_destroy(&ma) != 0) { fail = "mutexattr_destroy"; break; }
+        cases++;
+    } while (0);
+
+    if (fail) {
+        return Py_BuildValue("(is)", cases, fail);
+    }
+    return Py_BuildValue("(iO)", cases, Py_None);
+}
+
 // ── Module definition ─────────────────────────────────────────────────────────
 
 static PyMethodDef hal_methods[] = {
@@ -438,6 +566,7 @@ static PyMethodDef hal_methods[] = {
     {"dma_alloc",            py_dma_alloc,            METH_VARARGS, "Allocate zero-filled C-heap DMA buffer, return physical address"},
     {"serial_write",         py_serial_write,         METH_VARARGS, "Write raw text to the early serial console"},
     {"pthread_selftest",     py_pthread_selftest,     METH_NOARGS,  "Run a C-level pthread_create/join smoke test"},
+    {"pthread_attr_selftest",py_pthread_attr_selftest,METH_NOARGS,  "Exercise pthread_attr_* / pthread_condattr_* / pthread_mutexattr_* surface"},
     {NULL, NULL, 0, NULL}
 };
 

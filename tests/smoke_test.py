@@ -317,6 +317,7 @@ def run_example_tests(sock: socket.socket) -> tuple[int, int]:
     ]
     if SMP_CPUS.isdigit() and int(SMP_CPUS) > 1:
         runners.append(run_thread_demo_example)
+        runners.append(run_pthread_coverage_example)
     runners.extend([
         run_primes_example,
         run_recv_file_example,
@@ -408,6 +409,25 @@ def run_thread_demo_example(sock: socket.socket) -> bool:
             "values: " + repr(list(range(max(1, min(3, int(SMP_CPUS) - 1))))),
             "timeout expired: True",
             "delayed acquire: True",
+        ),
+    )
+
+
+def run_pthread_coverage_example(sock: socket.socket) -> bool:
+    # Covers beads pythonos-xa7.{1,2,3,4,5,6}: lifecycle, identity, TSS,
+    # lock+condvar, AP capacity, and attr surface.
+    return run_simple_example(
+        sock,
+        "run('/examples/pthread_coverage.py')\n",
+        (
+            "pthread coverage start",
+            "lifecycle ok",
+            "identity ok",
+            "tss ok",
+            "lock ok",
+            "capacity ok",
+            "attr ok",
+            "pthread coverage done passed=6/6",
         ),
     )
 
