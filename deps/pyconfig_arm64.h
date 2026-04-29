@@ -48,7 +48,7 @@
 #define PY_INT32_T  int32_t
 #define PY_INT64_T  int64_t
 
-/* ── Threading (GIL enabled, pthreads stubbed) ──────────────────────────── */
+/* ── Threading (GIL enabled by default, pthreads SMP-aware on x86_64) ───── */
 #define WITH_THREAD 1
 #define _POSIX_THREADS 1
 #define HAVE_PTHREAD_H 1
@@ -133,7 +133,8 @@
 #define VPATH      ""
 #define _PYTHONFRAMEWORK ""
 
-/* Enable the GIL */
+/* Enable the GIL by default. tools/setup_cpython.sh patches this for
+   PYTHONOS_FREE_THREADING=1 experimental builds. */
 #undef  Py_GIL_DISABLED
 
 /* ── pymalloc ────────────────────────────────────────────────────────────── */

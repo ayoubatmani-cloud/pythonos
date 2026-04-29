@@ -16,3 +16,4 @@ typedef struct {
 } __attribute__((packed)) gdt_ptr_t;
 
 void gdt_init(void);
+void gdt_load(void);

@@ -23,6 +23,9 @@ off_t  lseek(int fd, off_t offset, int whence);
 int    isatty(int fd);
 int    getpid(void);
 int    getpagesize(void);
+long   sysconf(int name);
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE _SC_PAGESIZE
 int    access(const char *path, int mode);
 char  *getcwd(char *buf, size_t size);
 int    unlink(const char *path);
@@ -41,3 +44,4 @@ int    getuid(void);
 int    getgid(void);
 unsigned int alarm(unsigned int seconds);
 int pause(void);
+int madvise(void *addr, size_t length, int advice);

@@ -5,6 +5,9 @@
 #include "io.h"
 #include "pit.h"
 #include "fb.h"
+#include "kthread.h"
+#include "smp.h"
+#include "tls.h"
 
 // Minimal serial output for early boot debugging (COM1)
 static void serial_putc(char c) {
@@ -16,6 +19,22 @@ static void serial_puts(const char *s) {
     while (*s) {
         if (*s == '\n') serial_putc('\r');
         serial_putc(*s++);
+    }
+}
+
+static void serial_put_u32(uint32_t value) {
+    char buf[11];
+    int i = 0;
+    if (value == 0) {
+        serial_putc('0');
+        return;
+    }
+    while (value && i < (int)sizeof(buf)) {
+        buf[i++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    while (i > 0) {
+        serial_putc(buf[--i]);
     }
 }
 
@@ -94,21 +113,7 @@ static void parse_mmap(mb2_info_t *mb2) {
     }
 }
 
-// ── Thread-Local Storage setup ───────────────────────────────────────────────
-// CPython 3.14 uses initial-exec TLS via %fs-relative addressing (e.g. %fs:-8).
-// Without a valid FS base the first TLS access faults at 0xfffffffffffffff8.
-// Allocate a small zeroed block and set IA32_FS_BASE (MSR 0xC0000100) to
-// point 32 bytes in, giving 32 bytes of usable TLS below FS:0.
-static uint8_t _tls_area[64] __attribute__((aligned(16)));
-
-static void tls_init(void) {
-    for (int i = 0; i < 64; i++) _tls_area[i] = 0;
-    uintptr_t fs_base = (uintptr_t)&_tls_area[32];
-    *(uint64_t *)fs_base = fs_base;   // self-pointer at FS:0 (glibc TCB convention)
-    uint32_t lo = (uint32_t)(fs_base);
-    uint32_t hi = (uint32_t)(fs_base >> 32);
-    __asm__ volatile("wrmsr" : : "c"(0xC0000100U), "a"(lo), "d"(hi) : "memory");
-}
+static uint8_t _tls_area[PYTHONOS_TLS_AREA_SIZE] __attribute__((aligned(16)));
 
 // ── FPU / SSE initialization ─────────────────────────────────────────────────
 static void fpu_init(void) {
@@ -153,6 +158,9 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     gdt_init();
     serial_puts("[PythonOS] boot: GDT OK\n");
 
+    smp_bsp_early_init();
+    serial_puts("[PythonOS] boot: BSP per-CPU state OK\n");
+
     idt_init();
     serial_puts("[PythonOS] boot: IDT OK\n");
 
@@ -166,8 +174,32 @@ void kernel_main(uint32_t mb2_magic, mb2_info_t *mb2_info) {
     fpu_init();
     serial_puts("[PythonOS] boot: FPU/SSE initialized\n");
 
-    tls_init();
+    if (!tls_init_area(_tls_area, sizeof(_tls_area))) {
+        serial_puts("[PythonOS] FATAL: TLS image does not fit boot area\n");
+        for (;;) __asm__("hlt");
+    }
     serial_puts("[PythonOS] boot: TLS initialized\n");
+
+    serial_puts("[PythonOS] boot: kernel thread self-test");
+    if (!kthread_selftest()) {
+        serial_puts(" FAILED\n");
+        for (;;) __asm__("hlt");
+    }
+    serial_puts(" OK\n");
+
+    smp_init(mb2_info);
+    serial_puts("[PythonOS] boot: SMP online ");
+    serial_put_u32(smp_online_count());
+    serial_puts("/");
+    serial_put_u32(smp_cpu_count());
+    serial_puts(" CPU(s), BSP APIC ID ");
+    serial_put_u32(smp_bsp_apic_id());
+    serial_puts("\n");
+    serial_puts("[PythonOS] boot: SMP workers ");
+    serial_put_u32(smp_worker_selftest_count());
+    serial_puts("/");
+    serial_put_u32(smp_online_count());
+    serial_puts(" completed\n");
 
     // 100 Hz timer — fast enough for scheduling, slow enough to be cheap
     pit_init(100);

@@ -79,7 +79,14 @@ def _abspath(path: str, cwd: str) -> str:
 
 
 async def sysinfo(argv: list[str], cwd: str, write) -> None:
+    import _hal
     _line(write, "PythonOS")
+    _line(write, "CPUs: " + str(getattr(_hal, "SMP_ONLINE", 1)) + "/" +
+          str(getattr(_hal, "SMP_CPUS", 1)) + " online")
+    _line(write, "SMP workers: " + str(getattr(_hal, "SMP_WORKERS", 1)) +
+          " boot self-tests")
+    _line(write, "GIL: " +
+          ("disabled" if getattr(_hal, "PY_GIL_DISABLED", 0) else "enabled"))
     tasks = list(scheduler.ps())
     _line(write, "Scheduler: " + str(len(tasks)) + " tasks")
     _line(write, "cwd: " + cwd)

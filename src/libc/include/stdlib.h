@@ -16,9 +16,15 @@ int unsetenv(const char *name);
 #ifndef mkstemp
 int mkstemp(char *tmpl);
 #endif
+#ifndef atexit
+int atexit(void (*fn)(void));
+#endif
 #ifndef strdup
 char *strdup(const char *s);
 #endif
 #ifndef strndup
 char *strndup(const char *s, size_t n);
+#endif
+#ifndef realpath
+char *realpath(const char *path, char *resolved_path);
 #endif

@@ -22,3 +22,4 @@ void interrupt_dispatch(uint64_t vector, uint64_t error_code,
                         uint64_t rflags, uint64_t rsp);
 
 void idt_init(void);
+void idt_load(void);

@@ -21,8 +21,10 @@ REPL_HOST_PORT ?= $(if $(PYTHONOS_HOST_PORT),$(PYTHONOS_HOST_PORT),5555)
 FILE_HOST_PORT ?= $(if $(PYTHONOS_FILE_PORT),$(PYTHONOS_FILE_PORT),17000)
 ARM64_REPL_HOST_PORT ?= 5556
 ARM64_FILE_HOST_PORT ?= 17002
+SMP_CPUS ?= $(if $(PYTHONOS_SMP_CPUS),$(PYTHONOS_SMP_CPUS),2)
+PYTHONOS_FREE_THREADING ?= 0
 
-QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G \
+QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G -smp $(SMP_CPUS) \
               -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
@@ -47,7 +49,7 @@ stop:
 restart: stop start
 
 test: $(ISO_OUT)
-	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) python3 tests/smoke_test.py $(ISO_OUT)
+	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) PYTHONOS_SMP_CPUS=$(SMP_CPUS) PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) python3 tests/smoke_test.py $(ISO_OUT)
 
 clean:
 	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
@@ -70,7 +72,7 @@ docker-build: .docker-image
 # ── CPython library (slow, cached — only rebuild if missing) ─────────────────
 
 $(LIBPYTHON): .docker-image
-	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	docker run --rm --platform linux/amd64 -e PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) -v $(PWD):/work -w /work $(DOCKER_IMG) \
 	  bash -c "./tools/setup_cpython.sh --build"
 
 # ── Source file sets ($(wildcard) is evaluated by Make, not a subshell) ──────
@@ -133,9 +135,11 @@ LDFLAGS     := -T linker.ld -nostdlib -z max-page-size=0x1000
 BUILD   := build
 ISO_DIR := iso
 
-BOOT_ASM  := src/boot/boot.asm src/boot/isr_stubs.asm
+BOOT_ASM  := src/boot/boot.asm src/boot/isr_stubs.asm \
+             src/boot/kthread_switch.asm src/boot/ap_trampoline_blob.asm
 BOOT_C    := src/boot/gdt.c src/boot/idt.c src/boot/main.c \
-             src/boot/pit.c src/boot/fb.c
+             src/boot/pit.c src/boot/fb.c src/boot/kthread.c src/boot/smp.c \
+             src/boot/tls.c
 HAL_C     := src/hal/hal.c
 LIBC_C    := src/libc/malloc.c  src/libc/string.c  src/libc/stdio.c \
              src/libc/time.c    src/libc/syscalls.c src/libc/math.c  \
@@ -147,8 +151,17 @@ HAL_OBJS  := $(patsubst src/%.c,$(BUILD)/%.c.o,$(HAL_C))
 LIBC_OBJS := $(patsubst src/%.c,$(BUILD)/%.c.o,$(LIBC_C))
 
 KERNEL_ELF := $(BUILD)/pythonos.elf
+AP_TRAMPOLINE_BIN := $(BUILD)/boot/ap_trampoline.bin
 
 $(BUILD)/%.asm.o: src/%.asm
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) $< -o $@
+
+$(AP_TRAMPOLINE_BIN): src/boot/ap_trampoline16.asm
+	@mkdir -p $(dir $@)
+	$(AS) -f bin $< -o $@
+
+$(BUILD)/boot/ap_trampoline_blob.asm.o: src/boot/ap_trampoline_blob.asm $(AP_TRAMPOLINE_BIN)
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
 
@@ -252,7 +265,7 @@ stop-arm64:
 	@pkill -f "qemu-system-aarch64.*$(ARM64_ELF)" || echo "No arm64 QEMU running."
 
 $(LIBPYTHON_ARM64): .docker-image
-	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	docker run --rm --platform linux/amd64 -e PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) -v $(PWD):/work -w /work $(DOCKER_IMG) \
 	  bash -c "./tools/setup_cpython.sh --arch=arm64 --build"
 
 $(ARM64_ELF): $(LIBPYTHON_ARM64) \

@@ -15,16 +15,7 @@ static void gdt_set(int i, uint32_t base, uint32_t limit, uint8_t access, uint8_
     gdt[i].access     = access;
 }
 
-void gdt_init(void) {
-    gdt_ptr.limit = sizeof(gdt) - 1;
-    gdt_ptr.base  = (uint64_t)&gdt;
-
-    gdt_set(0, 0, 0,          0x00, 0x00);   // null
-    gdt_set(1, 0, 0xFFFFFFFF, 0x9A, 0xAF);   // kernel code (64-bit)
-    gdt_set(2, 0, 0xFFFFFFFF, 0x92, 0xAF);   // kernel data (64-bit)
-    gdt_set(3, 0, 0xFFFFFFFF, 0xFA, 0xAF);   // user code   (64-bit, ring 3)
-    gdt_set(4, 0, 0xFFFFFFFF, 0xF2, 0xAF);   // user data   (64-bit, ring 3)
-
+void gdt_load(void) {
     __asm__ volatile (
         "lgdt %0\n\t"
         "mov $0x10, %%ax\n\t"
@@ -40,4 +31,17 @@ void gdt_init(void) {
         "1:\n\t"
         : : "m"(gdt_ptr) : "rax", "memory"
     );
+}
+
+void gdt_init(void) {
+    gdt_ptr.limit = sizeof(gdt) - 1;
+    gdt_ptr.base  = (uint64_t)&gdt;
+
+    gdt_set(0, 0, 0,          0x00, 0x00);   // null
+    gdt_set(1, 0, 0xFFFFFFFF, 0x9A, 0xAF);   // kernel code (64-bit)
+    gdt_set(2, 0, 0xFFFFFFFF, 0x92, 0xAF);   // kernel data (64-bit)
+    gdt_set(3, 0, 0xFFFFFFFF, 0xFA, 0xAF);   // user code   (64-bit, ring 3)
+    gdt_set(4, 0, 0xFFFFFFFF, 0xF2, 0xAF);   // user data   (64-bit, ring 3)
+
+    gdt_load();
 }

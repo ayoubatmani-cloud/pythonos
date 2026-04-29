@@ -7,6 +7,7 @@ Run these from the kernel shell:
   run('/examples/vfs_demo.py')
   sh('/examples/vfs_demo.py /tmp/custom-vfs-demo.txt')
   run('/examples/async_tasks.py')
+  run('/examples/thread_demo.py')
   sh('/examples/primes.py 100')
   run('/examples/tone.py')
   cat /examples/README.txt
@@ -16,6 +17,7 @@ What they show:
   hello_kernel.py  Inspect cwd, root TmpFS entries, and scheduler tasks
   vfs_demo.py      Write and read a TmpFS file through the VFS API
   async_tasks.py   Pass values between cooperative asyncio tasks
+  thread_demo.py   Start AP-backed CPython workers and timed lock waits
   primes.py        Run a small pure-Python computation
   tone.py          Build a tiny PCM tone buffer for HDA when available
 

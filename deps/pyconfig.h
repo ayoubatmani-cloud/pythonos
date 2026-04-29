@@ -54,7 +54,7 @@
 #define PY_INT32_T  int32_t
 #define PY_INT64_T  int64_t
 
-/* ── Threading (GIL enabled, pthreads stubbed) ──────────────────────────── */
+/* ── Threading (GIL enabled by default, pthreads SMP-aware) ─────────────── */
 #define WITH_THREAD 1
 #define _POSIX_THREADS 1
 /* Our src/libc/include/pthread.h is on the include path; cpython/pythread.h
@@ -202,7 +202,8 @@
 #define VPATH      ""
 #define _PYTHONFRAMEWORK ""
 
-/* Enable the GIL (we're not using free-threading in v1 — simpler) */
+/* Enable the GIL by default. tools/setup_cpython.sh patches this for
+   PYTHONOS_FREE_THREADING=1 experimental builds. */
 #undef  Py_GIL_DISABLED
 
 /* Disable site.py (no filesystem) — use #if not #ifdef */
@@ -258,6 +259,6 @@
 /* Do NOT define _GNU_SOURCE or _POSIX_C_SOURCE here.
  * Those macros cause system headers (time.h, stdlib.h) to transitively
  * include bits/pthreadtypes.h, which defines real Linux pthread struct layouts
- * that conflict with our single-core stub definitions in pthread.h. */
+ * that conflict with PythonOS pthread definitions. */
 
 #endif /* Py_PYCONFIG_H */

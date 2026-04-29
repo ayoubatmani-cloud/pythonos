@@ -71,11 +71,6 @@ ISR_NOERR i
 %assign i i+1
 %endrep
 
-; ── FPU/SSE save area (one per CPU; SMP will need a per-core array) ──────────
-section .bss
-align 16
-fxsave_area: resb 512      ; FXSAVE64 requires exactly 512 bytes, 16-byte aligned
-
 section .text
 
 ; Common handler: save full integer + FPU/SSE state, call C dispatcher, restore
@@ -112,7 +107,9 @@ isr_common:
     ; ── 2. Save x87 + MMX + SSE state ────────────────────────────────────
     ; FXSAVE64: saves x87 control/status/tag, ST0-ST7, XMM0-XMM15, MXCSR
     ; Must be done BEFORE calling any C code that might use float/SSE.
-    fxsave64 [fxsave_area]
+    ; GS base points at the current smp_cpu_t; its first field is a
+    ; 16-byte-aligned 512-byte FXSAVE area.
+    fxsave64 [gs:0]
 
     ; ── 3. Align stack to 16 bytes (System V ABI requirement for calls) ───
     ; After 15 pushes (120 bytes) + the 8 bytes for vector = 128 bytes
@@ -144,7 +141,7 @@ isr_common:
     mov     rsp, rbp
 
     ; ── 6. Restore FPU/SSE state ──────────────────────────────────────────
-    fxrstor64 [fxsave_area]
+    fxrstor64 [gs:0]
 
     ; ── 7. Restore integer registers ─────────────────────────────────────
     pop     r15
@@ -165,3 +162,5 @@ isr_common:
 
     add     rsp, 16         ; discard vector + error_code pushed by stub
     iretq
+
+section .note.GNU-stack noalloc noexec nowrite progbits

@@ -1,8 +1,7 @@
-/* pthread.h — minimal POSIX thread stubs for PythonOS bare-metal.
+/* pthread.h — minimal POSIX thread substrate for PythonOS bare-metal.
  *
- * Single-CPU system: all primitives are cooperative no-ops.
- * pthread_create() returns ENOSYS — thread creation is handled by the
- * kernel asyncio scheduler, not the POSIX thread API.
+ * Mutexes/condvars/TLS are SMP-aware. On x86_64, pthread_create() dispatches
+ * joinable or detached workers onto initialized APs.
  */
 #pragma once
 
@@ -13,8 +12,8 @@
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
 /* Set glibc file guard so bits/pthreadtypes.h is skipped when system
- * signal.h or other headers transitively include it — prevents redefinition
- * conflicts with our simple stub types below. */
+ * signal.h or other headers transitively include it; this prevents
+ * redefinition conflicts with PythonOS pthread types below. */
 #define _BITS_PTHREADTYPES_COMMON_H 1
 
 typedef unsigned long  pthread_t;
@@ -23,7 +22,10 @@ typedef unsigned       pthread_key_t;
 /* Define __have_pthread_attr_t so bits/types/sigevent_t.h skips its
  * definition of 'union pthread_attr_t' which conflicts with our struct. */
 #ifndef __have_pthread_attr_t
-typedef struct { int dummy; }    pthread_attr_t;
+typedef struct {
+    int detachstate;
+    size_t stacksize;
+} pthread_attr_t;
 #define __have_pthread_attr_t 1
 #endif
 typedef struct { int locked; }   pthread_mutex_t;

@@ -218,6 +218,102 @@ int snprintf(char *buf, size_t n, const char *fmt, ...) {
     va_end(ap); return r;
 }
 
+static const char *_scan_spaces(const char *s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' ||
+           *s == '\v' || *s == '\f') {
+        s++;
+    }
+    return s;
+}
+
+static int _scan_signed_ll(const char **input, long long *out) {
+    const char *s = _scan_spaces(*input);
+    int neg = 0;
+    if (*s == '+' || *s == '-') {
+        neg = *s == '-';
+        s++;
+    }
+    if (*s < '0' || *s > '9') {
+        return 0;
+    }
+    long long value = 0;
+    while (*s >= '0' && *s <= '9') {
+        value = value * 10 + (*s - '0');
+        s++;
+    }
+    *out = neg ? -value : value;
+    *input = s;
+    return 1;
+}
+
+int vsscanf(const char *buf, const char *fmt, va_list ap) {
+    const char *s = buf;
+    int assigned = 0;
+
+    while (*fmt) {
+        if (*fmt == ' ' || *fmt == '\t' || *fmt == '\n' || *fmt == '\r' ||
+            *fmt == '\v' || *fmt == '\f') {
+            fmt = _scan_spaces(fmt);
+            s = _scan_spaces(s);
+            continue;
+        }
+        if (*fmt != '%') {
+            if (*s != *fmt) {
+                break;
+            }
+            s++;
+            fmt++;
+            continue;
+        }
+
+        fmt++;
+        int long_count = 0;
+        while (*fmt == 'l' && long_count < 2) {
+            long_count++;
+            fmt++;
+        }
+
+        switch (*fmt++) {
+        case 'd':
+        case 'i': {
+            long long value;
+            if (!_scan_signed_ll(&s, &value)) {
+                return assigned ? assigned : 0;
+            }
+            if (long_count >= 2) {
+                *va_arg(ap, long long *) = value;
+            } else if (long_count == 1) {
+                *va_arg(ap, long *) = (long)value;
+            } else {
+                *va_arg(ap, int *) = (int)value;
+            }
+            assigned++;
+            break;
+        }
+        default:
+            return assigned;
+        }
+    }
+
+    return assigned;
+}
+
+int sscanf(const char *buf, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsscanf(buf, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int __isoc99_sscanf(const char *buf, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vsscanf(buf, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
 int puts(const char *s) {
     serial_write(s, strlen(s));
     serial_putc('\n');

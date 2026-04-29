@@ -19,33 +19,46 @@ class PageFrame:
 
 class PhysicalMemoryManager:
     def __init__(self, mmap: list[tuple[int, int]]) -> None:
-        self._free: list[int] = []   # physical addresses of free frames
+        self._ranges: list[list[int]] = []   # [start, end) physical ranges
+        self._free_pages = 0
 
         for base, length in mmap:
             # Align base up, end down, to page boundaries
             start = (base + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
             end   = (base + length)        & ~(PAGE_SIZE - 1)
 
-            for addr in range(start, end, PAGE_SIZE):
-                if addr >= RESERVED_MB * 1024 * 1024:
-                    self._free.append(addr)
+            if start < RESERVED_MB * 1024 * 1024:
+                start = RESERVED_MB * 1024 * 1024
+            if start < end:
+                self._ranges.append([start, end])
+                self._free_pages += (end - start) // PAGE_SIZE
 
     @property
     def free_pages(self) -> int:
-        return len(self._free)
+        return self._free_pages
 
     def alloc(self) -> PageFrame:
-        if not self._free:
-            raise MemoryError("Out of physical memory")
-        return PageFrame(phys=self._free.pop())
+        while self._ranges:
+            region = self._ranges[-1]
+            start, end = region
+            if start >= end:
+                self._ranges.pop()
+                continue
+            end -= PAGE_SIZE
+            region[1] = end
+            self._free_pages -= 1
+            return PageFrame(phys=end)
+        raise MemoryError("Out of physical memory")
 
     def alloc_n(self, n: int) -> list[PageFrame]:
-        if len(self._free) < n:
+        if self._free_pages < n:
             raise MemoryError(f"Cannot allocate {n} frames ({self.free_pages} available)")
-        return [PageFrame(phys=self._free.pop()) for _ in range(n)]
+        return [self.alloc() for _ in range(n)]
 
     def free(self, frame: PageFrame) -> None:
-        self._free.append(frame.phys)
+        self._ranges.append([frame.phys, frame.phys + PAGE_SIZE])
+        self._free_pages += 1
 
     def free_many(self, frames: list[PageFrame]) -> None:
-        self._free.extend(f.phys for f in frames)
+        for frame in frames:
+            self.free(frame)

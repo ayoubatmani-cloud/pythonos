@@ -69,6 +69,7 @@ class InterruptRouter:
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
+        setattr(loop, "_interrupt_dispatch", self._dispatch)
 
     def register(self, vector: int) -> Callable[[Handler], Handler]:
         def decorator(fn: Handler) -> Handler:

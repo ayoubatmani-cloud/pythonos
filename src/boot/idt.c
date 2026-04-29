@@ -1,5 +1,6 @@
 #include "idt.h"
 #include "io.h"
+#include "smp.h"
 #include <stddef.h>
 
 #define IDT_ENTRIES 256
@@ -27,6 +28,8 @@ DECLARE_ISR(32) DECLARE_ISR(33) DECLARE_ISR(34) DECLARE_ISR(35)
 DECLARE_ISR(36) DECLARE_ISR(37) DECLARE_ISR(38) DECLARE_ISR(39)
 DECLARE_ISR(40) DECLARE_ISR(41) DECLARE_ISR(42) DECLARE_ISR(43)
 DECLARE_ISR(44) DECLARE_ISR(45) DECLARE_ISR(46) DECLARE_ISR(47)
+DECLARE_ISR(254)
+DECLARE_ISR(255)
 
 static void idt_set(int vector, void (*handler)(void), uint8_t type) {
     uint64_t addr = (uint64_t)handler;
@@ -103,9 +106,15 @@ void idt_init(void) {
     idt_set(45, isr_45, IDT_INTERRUPT_GATE);
     idt_set(46, isr_46, IDT_INTERRUPT_GATE);
     idt_set(47, isr_47, IDT_INTERRUPT_GATE);
+    idt_set(254, isr_254, IDT_INTERRUPT_GATE);  // local APIC mailbox kick
+    idt_set(255, isr_255, IDT_INTERRUPT_GATE);  // local APIC spurious vector
 
     pic_remap();
 
+    idt_load();
+}
+
+void idt_load(void) {
     __asm__ volatile ("lidt %0" :: "m"(idt_ptr));
 }
 
@@ -231,11 +240,18 @@ extern void interrupt_dispatch_python(uint64_t vector, uint64_t error_code,
 void interrupt_dispatch(uint64_t vector, uint64_t error_code,
                         uint64_t rip, uint64_t cs,
                         uint64_t rflags, uint64_t rsp) {
+    if (vector == 254 || vector == 255) {
+        smp_lapic_eoi();
+        return;
+    }
+
     if (vector < 32)
         _fatal_exception(vector, error_code, rip, rsp);
 
     interrupt_dispatch_python(vector, error_code, rip, cs, rflags, rsp);
 
-    if (vector >= 32 && vector <= 47)
+    if (vector >= 32 && vector <= 47) {
         pic_eoi(vector);
+        smp_lapic_eoi();
+    }
 }

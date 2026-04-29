@@ -29,6 +29,12 @@ make                # rebuild kernel + ISO if sources changed
 # x86_64 — boots in QEMU, serial console in your terminal
 make run
 
+# x86_64 CPU count defaults to 2; override when needed
+SMP_CPUS=4 make run
+
+# Experimental x86_64 CPython free-threading build
+PYTHONOS_FREE_THREADING=1 make cleanall all
+
 # arm64 — boots QEMU virt machine with PL011 serial console
 make run-arm64
 
@@ -38,6 +44,13 @@ make stop-arm64
 ```
 
 Use `Ctrl-A X` to exit QEMU.
+
+The no-GIL build is currently supported on x86_64 QEMU with SMP enabled. It
+boots CPython with `PY_GIL_DISABLED=1`, starts AP-backed pthread workers through
+`_thread`, and uses a small mmap shim that validates fixed mappings before
+touching memory. The support boundary is still intentionally narrow: native
+threads are worker dispatches onto initialized APs, not a full scheduler for
+arbitrary blocking POSIX workloads.
 
 ### Connect to the TCP REPL
 
@@ -248,7 +261,12 @@ The `>>>` prompt is also available on the serial console (the QEMU terminal wind
 make test
 ```
 
-This boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass.
+This boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass. The x86_64 smoke test boots with two virtual CPUs by default; use `SMP_CPUS=4 make test` to expose more.
+
+For the no-GIL path, run `PYTHONOS_FREE_THREADING=1 SMP_CPUS=4 make test`.
+That smoke covers the boot-time SMP self-tests, `_hal.pthread_selftest()`, and
+`/examples/thread_demo.py`, including multiple Python worker threads and timed
+lock acquisition.
 
 ---
 
@@ -266,6 +284,8 @@ The philosophical bet: "everything is an object" is a better organizing principl
 GRUB2 (multiboot2)
   └─▶ boot.asm — long mode, 4 GiB identity map, 4 MiB stack
         └─▶ main.c — GDT, IDT, PIC (8259A), PIT (100 Hz), COM1 serial
+              ├─▶ kthread.c — bootstrap-CPU native thread self-test
+              ├─▶ smp.c — ACPI MADT discovery, AP startup, per-CPU state, native AP worker dispatch
               └─▶ hal.c — CPython init, freeze frozen modules
                     └─▶ kernel.boot() — Python owns the machine
                           ├─▶ PMM + VMM

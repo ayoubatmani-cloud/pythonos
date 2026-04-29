@@ -30,3 +30,6 @@ mmio_write8  = _hal.mmio_write8
 def set_interrupt_router(fn) -> None:
     """Register the callable that all hardware/software interrupts route through."""
     _hal.set_interrupt_router(fn)
+
+
+drain_interrupts = _hal.drain_interrupts

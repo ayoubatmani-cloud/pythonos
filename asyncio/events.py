@@ -100,7 +100,6 @@ class BareMetalEventLoop(AbstractEventLoop):
         return handle
 
     def call_soon_threadsafe(self, fn, *args, context=None):
-        # Called from C interrupt context — list.append is safe on single-core bare metal
         handle = _Handle(fn, args)
         self._ready.append(handle)
         return handle
@@ -152,13 +151,22 @@ class BareMetalEventLoop(AbstractEventLoop):
     def _run_once(self):
         now = _monotonic()
 
+        dispatch = getattr(self, "_interrupt_dispatch", None)
+        if dispatch is not None:
+            try:
+                import _hal
+                for irq in _hal.drain_interrupts():
+                    dispatch(*irq)
+            except Exception as exc:
+                import sys
+                sys.stderr.write(f'asyncio: exception draining interrupts: {exc}\n')
+
         # Promote scheduled callbacks that are past due
         while self._scheduled and self._scheduled[0][0] <= now:
             _, handle = self._scheduled.pop(0)
             self._ready.append(handle)
 
-        # Run all currently ready callbacks (snapshot count so interrupt appends
-        # go to next iteration)
+        # Run all currently ready callbacks.
         ntodo = len(self._ready)
         for _ in range(ntodo):
             if not self._ready:

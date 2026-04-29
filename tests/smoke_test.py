@@ -21,12 +21,14 @@ import time
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
 FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "17000"))
+SMP_CPUS = os.environ.get("PYTHONOS_SMP_CPUS", "2")
+FREE_THREADING = os.environ.get("PYTHONOS_FREE_THREADING", "0")
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 
 QEMU_CMD = [
     "qemu-system-x86_64",
-    "-machine", "q35", "-cpu", "qemu64", "-m", "2G",
+    "-machine", "q35", "-cpu", "qemu64", "-m", "2G", "-smp", SMP_CPUS,
     "-netdev", f"user,id=net0,hostfwd=tcp::{HOST_PORT}-:5000,hostfwd=tcp::{FILE_HOST_PORT}-:7000",
     "-device", "virtio-net-pci,netdev=net0",
     "-device", "intel-hda", "-device", "hda-duplex",
@@ -54,7 +56,23 @@ TEST_CASES = [
     ("ftp get /tmp/repl-port.txt 5000\n", "ftp: port already in use: 5000"),
     ("ls /examples\n",                  "hello_kernel.py"),
     ("vi\n",                            "NameError"),
+    ("__import__('_hal').PY_GIL_DISABLED\n", "1" if FREE_THREADING == "1" else "0"),
 ]
+
+if SMP_CPUS.isdigit():
+    TEST_CASES.append((
+        "(__import__('_hal').SMP_ONLINE, __import__('_hal').SMP_CPUS)\n",
+        f"({SMP_CPUS}, {SMP_CPUS})",
+    ))
+    TEST_CASES.append((
+        "(__import__('_hal').SMP_WORKERS, __import__('_hal').SMP_ONLINE)\n",
+        f"({SMP_CPUS}, {SMP_CPUS})",
+    ))
+    if int(SMP_CPUS) > 1:
+        TEST_CASES.append((
+            "__import__('_hal').pthread_selftest()\n",
+            "(0, 123456789, 4660)",
+        ))
 
 
 def wait_for_port(port: int, timeout: float, proc: subprocess.Popen) -> bool:
@@ -202,6 +220,35 @@ def run() -> int:
             passed += example_passed
             failed += example_failed
 
+            if serial_contains(serial_log.name, "kernel thread self-test OK"):
+                print("[PASS] boot kernel-thread self-test             -> serial marker found")
+                passed += 1
+            else:
+                print("[FAIL] boot kernel-thread self-test             -> missing serial marker")
+                failed += 1
+
+            expected_smp = f"SMP online {SMP_CPUS}/{SMP_CPUS}"
+            if SMP_CPUS.isdigit() and serial_contains(serial_log.name, expected_smp):
+                print("[PASS] boot SMP AP startup                     -> serial marker found")
+                passed += 1
+            elif not SMP_CPUS.isdigit() and serial_contains(serial_log.name, "SMP online "):
+                print("[PASS] boot SMP AP startup                     -> serial marker found")
+                passed += 1
+            else:
+                print("[FAIL] boot SMP AP startup                     -> missing serial marker")
+                failed += 1
+
+            expected_workers = f"SMP workers {SMP_CPUS}/{SMP_CPUS} completed"
+            if SMP_CPUS.isdigit() and serial_contains(serial_log.name, expected_workers):
+                print("[PASS] boot SMP worker dispatch                -> serial marker found")
+                passed += 1
+            elif not SMP_CPUS.isdigit() and serial_contains(serial_log.name, "SMP workers "):
+                print("[PASS] boot SMP worker dispatch                -> serial marker found")
+                passed += 1
+            else:
+                print("[FAIL] boot SMP worker dispatch                -> missing serial marker")
+                failed += 1
+
             print(f"\n[smoke] {passed} passed, {failed} failed")
             if failed:
                 _print_serial(serial_log.name)
@@ -263,15 +310,21 @@ def run_ed_editor_test(sock: socket.socket) -> bool:
 def run_example_tests(sock: socket.socket) -> tuple[int, int]:
     passed = 0
     failed = 0
-    for runner in (
+    runners = [
         run_hello_kernel_example,
         run_vfs_demo_example,
         run_async_tasks_example,
+    ]
+    if SMP_CPUS.isdigit() and int(SMP_CPUS) > 1:
+        runners.append(run_thread_demo_example)
+    runners.extend([
         run_primes_example,
         run_recv_file_example,
         run_send_file_example,
         run_tone_example,
-    ):
+    ])
+
+    for runner in runners:
         if runner(sock):
             passed += 1
         else:
@@ -340,6 +393,23 @@ def run_tone_example(sock: socket.socket) -> bool:
     print(f"[FAIL] {expr.strip()!r:45s} → expected a completed tone example status")
     print(f"       got: {response!r}")
     return False
+
+
+def run_thread_demo_example(sock: socket.socket) -> bool:
+    return run_simple_example(
+        sock,
+        "run('/examples/thread_demo.py')\n",
+        (
+            "thread demo",
+            "worker ident: True",
+            "worker done: True",
+            "delayed ident: True",
+            "workers: " + str(max(1, min(3, int(SMP_CPUS) - 1))),
+            "values: " + repr(list(range(max(1, min(3, int(SMP_CPUS) - 1))))),
+            "timeout expired: True",
+            "delayed acquire: True",
+        ),
+    )
 
 
 def run_recv_file_example(sock: socket.socket) -> bool:
@@ -497,6 +567,14 @@ def _print_serial(path: str) -> None:
             print("[smoke] (serial log is empty)")
     except OSError:
         pass
+
+
+def serial_contains(path: str, needle: str) -> bool:
+    try:
+        with open(path) as f:
+            return needle in f.read()
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":

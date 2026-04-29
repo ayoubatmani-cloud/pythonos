@@ -6,6 +6,8 @@
  */
 
 #include "include/libc.h"
+#include "include/spinlock.h"
+#include "include/sys/syscall.h"
 #ifndef ARCH_ARM64
 #include "../boot/io.h"
 #endif
@@ -13,6 +15,7 @@
 #include "../boot/io_arm64.h"
 #endif
 #include <stdint.h>
+#include <sys/resource.h>
 
 // ── Process ───────────────────────────────────────────────────────────────────
 
@@ -33,9 +36,22 @@ void exit(int code) {
 
 void _exit(int code) { exit(code); }
 
+int atexit(void (*fn)(void)) {
+    (void)fn;
+    return 0;
+}
+
 int getpid(void) { return 1; }    // kernel is PID 1
 
 int getpagesize(void) { return 4096; }
+
+long sysconf(int name) {
+    if (name == _SC_PAGESIZE || name == _SC_PAGE_SIZE) {
+        return getpagesize();
+    }
+    errno = EINVAL;
+    return -1;
+}
 
 // ── Environment ───────────────────────────────────────────────────────────────
 
@@ -154,20 +170,200 @@ int ioctl(int fd, unsigned long req, ...) { (void)fd; (void)req; errno = ENOSYS;
 #define PROT_READ  1
 #define PROT_WRITE 2
 #define MAP_PRIVATE 2
+#define MAP_FIXED   0x10
 #define MAP_ANON    0x20
 #define MAP_FAILED  ((void *)-1)
 
+#define MMAP_MAX_RECORDS 128
+#define MMAP_PAGE_SIZE 4096UL
+
+typedef struct {
+    int used;
+    void *addr;
+    void *raw;
+    size_t length;
+} mmap_record_t;
+
+static mmap_record_t mmap_records[MMAP_MAX_RECORDS];
+static spinlock_t mmap_lock = SPINLOCK_INITIALIZER;
+
+static int mmap_range_end(uintptr_t start, size_t length, uintptr_t *end) {
+    uintptr_t value = start + length;
+    if (value < start) {
+        return 0;
+    }
+    *end = value;
+    return 1;
+}
+
+static size_t mmap_page_align(size_t length) {
+    return (length + MMAP_PAGE_SIZE - 1) & ~(MMAP_PAGE_SIZE - 1);
+}
+
+static int mmap_record_contains(const mmap_record_t *record,
+                                uintptr_t start, uintptr_t end) {
+    uintptr_t record_start = (uintptr_t)record->addr;
+    uintptr_t record_end = record_start + record->length;
+    return record->used && start >= record_start && end <= record_end;
+}
+
+static int mmap_range_is_mapped(uintptr_t start, size_t length) {
+    uintptr_t end;
+    if (!mmap_range_end(start, length, &end)) {
+        return 0;
+    }
+    for (unsigned i = 0; i < MMAP_MAX_RECORDS; i++) {
+        if (mmap_record_contains(&mmap_records[i], start, end)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int mmap_alloc_record(void *addr, void *raw, size_t length) {
+    for (unsigned i = 0; i < MMAP_MAX_RECORDS; i++) {
+        if (!mmap_records[i].used) {
+            mmap_records[i].used = 1;
+            mmap_records[i].addr = addr;
+            mmap_records[i].raw = raw;
+            mmap_records[i].length = length;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int mmap_raw_still_mapped(void *raw) {
+    for (unsigned i = 0; i < MMAP_MAX_RECORDS; i++) {
+        if (mmap_records[i].used && mmap_records[i].raw == raw) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) {
-    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
-    // mmap(MAP_ANONYMOUS) must return zeroed pages — use calloc to match that contract
-    void *p = calloc(1, length);
-    return p ? p : MAP_FAILED;
+    (void)prot; (void)fd; (void)offset;
+    if (length == 0) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    size_t map_length = mmap_page_align(length);
+    if (map_length < length) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+
+    if ((flags & MAP_FIXED) && addr) {
+        spin_lock(&mmap_lock);
+        int mapped = mmap_range_is_mapped((uintptr_t)addr, map_length);
+        spin_unlock(&mmap_lock);
+        if (!mapped) {
+            errno = EINVAL;
+            return MAP_FAILED;
+        }
+        memset(addr, 0, map_length);
+        return addr;
+    }
+
+    if ((flags & MAP_FIXED) && !addr) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+
+    size_t total = map_length + MMAP_PAGE_SIZE + sizeof(void *);
+    if (total < map_length) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    void *raw = calloc(1, total);
+    if (!raw) {
+        return MAP_FAILED;
+    }
+
+    uintptr_t aligned = ((uintptr_t)raw + sizeof(void *) + MMAP_PAGE_SIZE - 1) &
+                        ~(uintptr_t)(MMAP_PAGE_SIZE - 1);
+    ((void **)aligned)[-1] = raw;
+
+    spin_lock(&mmap_lock);
+    if (mmap_alloc_record((void *)aligned, raw, map_length)) {
+        spin_unlock(&mmap_lock);
+        return (void *)aligned;
+    }
+    spin_unlock(&mmap_lock);
+
+    errno = ENOMEM;
+    free(raw);
+    return MAP_FAILED;
 }
 
 int munmap(void *addr, size_t length) {
-    (void)length;
-    free(addr);   // matches our mmap → malloc above
-    return 0;
+    if (!addr || length == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    size_t unmap_length = mmap_page_align(length);
+    if (unmap_length < length) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    uintptr_t target = (uintptr_t)addr;
+    uintptr_t unmap_end;
+    if (!mmap_range_end(target, unmap_length, &unmap_end)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    spin_lock(&mmap_lock);
+    for (unsigned i = 0; i < MMAP_MAX_RECORDS; i++) {
+        if (!mmap_records[i].used) {
+            continue;
+        }
+        uintptr_t start = (uintptr_t)mmap_records[i].addr;
+        uintptr_t end = start + mmap_records[i].length;
+        if (target < start || unmap_end > end) {
+            continue;
+        }
+
+        if (target == start && unmap_end == end) {
+            void *raw = mmap_records[i].raw;
+            mmap_records[i].used = 0;
+            int still_mapped = mmap_raw_still_mapped(raw);
+            spin_unlock(&mmap_lock);
+            if (!still_mapped) {
+                free(raw);
+            }
+            return 0;
+        }
+
+        if (target == start) {
+            mmap_records[i].addr = (void *)unmap_end;
+            mmap_records[i].length = end - unmap_end;
+            spin_unlock(&mmap_lock);
+            return 0;
+        }
+
+        if (unmap_end == end) {
+            mmap_records[i].length = target - start;
+            spin_unlock(&mmap_lock);
+            return 0;
+        }
+
+        void *raw = mmap_records[i].raw;
+        size_t right_length = end - unmap_end;
+        if (!mmap_alloc_record((void *)unmap_end, raw, right_length)) {
+            spin_unlock(&mmap_lock);
+            errno = ENOMEM;
+            return -1;
+        }
+        mmap_records[i].length = target - start;
+        spin_unlock(&mmap_lock);
+        return 0;
+    }
+    spin_unlock(&mmap_lock);
+    errno = EINVAL;
+    return -1;
 }
 
 /* glibc internal: returns pointer to the thread-local errno variable.
@@ -177,6 +373,13 @@ int *__errno_location(void) { return &errno; }
 
 int mprotect(void *addr, size_t len, int prot) {
     (void)addr; (void)len; (void)prot;
+    return 0;
+}
+
+int madvise(void *addr, size_t length, int advice) {
+    (void)addr;
+    (void)length;
+    (void)advice;
     return 0;
 }
 
@@ -224,7 +427,32 @@ int pause(void) { errno = EINTR; return -1; }
 
 int isatty(int fd) { return fd == 1 || fd == 2; }
 
-long syscall(long number, ...) { (void)number; return 1; }
+int getrusage(int who, struct rusage *usage) {
+    (void)who;
+    if (usage) {
+        memset(usage, 0, sizeof(*usage));
+    }
+    return 0;
+}
+
+static long _native_tid(void) {
+#ifdef ARCH_ARM64
+    return 1;
+#else
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(1), "c"(0));
+    return (long)(((ebx >> 24) & 0xffU) + 1);
+#endif
+}
+
+long syscall(long number, ...) {
+    if (number == SYS_gettid) {
+        return _native_tid();
+    }
+    return 1;
+}
 
 void *dlopen(const char *file, int mode) { (void)file; (void)mode; return NULL; }
 void *dlsym(void *handle, const char *sym) { (void)handle; (void)sym; return NULL; }
@@ -293,6 +521,19 @@ char *strerror(int errnum) { (void)errnum; return "Error"; }
 char *getcwd(char *buf, size_t size) {
     if (buf && size > 0) { buf[0] = '/'; buf[1] = '\0'; }
     return buf;
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (!resolved_path) {
+        return strdup(path);
+    }
+    strncpy(resolved_path, path, PATH_MAX - 1);
+    resolved_path[PATH_MAX - 1] = '\0';
+    return resolved_path;
 }
 
 // environ: empty environment (bare metal has no env vars)

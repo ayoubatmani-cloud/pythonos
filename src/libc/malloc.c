@@ -1,9 +1,12 @@
 /*
  * malloc.c — Buddy allocator for CPython's bare-metal heap.
  *
- * Uses a static 64 MiB region linked into the kernel BSS.
- * Orders 0–17 cover 32 bytes to 4 MiB in powers of two.
- * No locks yet — safe on single-core; extend with spinlocks for SMP.
+ * Uses a static 512 MiB region linked into the kernel BSS. QEMU boots with
+ * much more RAM than the early allocator originally used, and CPython's
+ * free-threaded/mimalloc build needs a larger C heap during initialization.
+ * Orders cover 32 bytes to 512 MiB in powers of two.
+ * Protected by a spinlock so native AP workers and future pthreads can share
+ * the C heap safely.
  *
  * Layout of each block:
  *   [block_header_t | .... user data .... ]
@@ -11,12 +14,13 @@
  */
 
 #include "include/libc.h"
+#include "include/spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
-#define HEAP_SIZE   (64 * 1024 * 1024)   // 64 MiB
+#define HEAP_SIZE   (512 * 1024 * 1024)   // 512 MiB
 #define MIN_ORDER   5                      // 2^5  = 32 bytes (includes header)
-#define MAX_ORDER   26                     // 2^26 = 64 MiB
+#define MAX_ORDER   29                     // 2^29 = 512 MiB
 #define NUM_ORDERS  (MAX_ORDER - MIN_ORDER + 1)
 #define MIN_BLOCK   (1u << MIN_ORDER)
 #define MAGIC_FREE  0xFEEBDAED
@@ -38,6 +42,7 @@ typedef struct block_header {
 // Free lists — one per order
 static block_header_t *free_lists[NUM_ORDERS];
 static int heap_initialized = 0;
+static spinlock_t heap_lock = SPINLOCK_INITIALIZER;
 
 static inline int order_of(size_t size) {
     size_t s = size + HEADER_SIZE;
@@ -89,18 +94,28 @@ static void heap_init(void) {
 }
 
 void *malloc(size_t size) {
+    spin_lock(&heap_lock);
     if (!heap_initialized) heap_init();
-    if (size == 0) return NULL;
+    if (size == 0) {
+        spin_unlock(&heap_lock);
+        return NULL;
+    }
 
     int need = order_of(size);
-    if (need > MAX_ORDER) return NULL;
+    if (need > MAX_ORDER) {
+        spin_unlock(&heap_lock);
+        return NULL;
+    }
 
     // Find a free block of sufficient order
     int found = -1;
     for (int o = need; o <= MAX_ORDER; o++) {
         if (free_lists[o - MIN_ORDER]) { found = o; break; }
     }
-    if (found < 0) return NULL;   // out of memory
+    if (found < 0) {
+        spin_unlock(&heap_lock);
+        return NULL;   // out of memory
+    }
 
     // Split down to the required order
     block_header_t *blk = free_lists[found - MIN_ORDER];
@@ -118,14 +133,24 @@ void *malloc(size_t size) {
 
     blk->magic = MAGIC_USED;
     blk->order = need;
-    return (void *)((char *)blk + HEADER_SIZE);
+    void *ptr = (void *)((char *)blk + HEADER_SIZE);
+    spin_unlock(&heap_lock);
+    return ptr;
 }
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
 void free(void *ptr) {
     if (!ptr) return;
+    spin_lock(&heap_lock);
 
     block_header_t *blk = (block_header_t *)((char *)ptr - HEADER_SIZE);
-    if (blk->magic != MAGIC_USED) return;   // double-free or corruption
+    if (blk->magic != MAGIC_USED) {
+        spin_unlock(&heap_lock);
+        return;   // double-free or corruption
+    }
     blk->magic = MAGIC_FREE;
 
     int order = blk->order;
@@ -133,18 +158,22 @@ void free(void *ptr) {
     // Coalesce with buddy while possible
     while (order < MAX_ORDER) {
         block_header_t *buddy = buddy_of(blk, order);
-        if (!buddy || buddy->magic != MAGIC_FREE || buddy->order != order)
+        if (!buddy || buddy->magic != MAGIC_FREE || (int)buddy->order != order)
             break;
         free_list_remove(buddy, order);
         // Lower address becomes the merged block
-        if (buddy < blk) blk = buddy;
+        if ((uintptr_t)buddy < (uintptr_t)blk) blk = buddy;
         order++;
         blk->order = order;
     }
 
     blk->magic = MAGIC_FREE;
     free_list_add(blk, order);
+    spin_unlock(&heap_lock);
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 void *calloc(size_t n, size_t size) {
     size_t total = n * size;
@@ -183,10 +212,12 @@ void *aligned_alloc(size_t alignment, size_t size) {
 
 // Statistics (useful for the kernel shell)
 size_t malloc_free_bytes(void) {
+    spin_lock(&heap_lock);
     size_t total = 0;
     for (int o = MIN_ORDER; o <= MAX_ORDER; o++) {
         block_header_t *b = free_lists[o - MIN_ORDER];
         while (b) { total += (1u << o); b = b->next_free; }
     }
+    spin_unlock(&heap_lock);
     return total;
 }

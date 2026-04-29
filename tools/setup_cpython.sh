@@ -16,7 +16,7 @@
 #              feature probes can compile, link, and execute on the build machine.
 #              ac_cv_* cache variables pre-answer the probes that would wrongly
 #              detect POSIX features we don't have.
-#   Phase 2 — make libpython3.14.a is driven with the CROSS compiler
+#   Phase 2 — make libpython$(VERSION)$(ABIFLAGS).a is driven with the CROSS compiler
 #              (x86_64-elf-gcc = x86_64-linux-gnu-gcc in Docker) plus our
 #              bare-metal CFLAGS. Our pyconfig.h (installed after configure)
 #              overrides everything configure detected, so the resulting .o
@@ -51,7 +51,8 @@ if [[ "$ARCH" == "arm64" ]]; then
     # No -mno-red-zone: that flag is x86-only; AArch64 has no red zone.
     # NOTE: do NOT define -D_GNU_SOURCE or -D_POSIX_C_SOURCE. Those feature-test
     #   macros cause system headers to transitively include bits/pthreadtypes.h
-    #   which defines real Linux pthread struct layouts that conflict with our stubs.
+    #   which defines real Linux pthread struct layouts that conflict with
+    #   PythonOS pthread definitions.
     TARGET_CFLAGS="-std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
       -ffixed-x18 \
       -march=armv8-a \
@@ -81,7 +82,8 @@ else
     #   able to generate SSE2 code since it runs with FPU state fully saved.
     # NOTE: do NOT define -D_GNU_SOURCE or -D_POSIX_C_SOURCE. Those feature-test
     #   macros cause system headers to transitively include bits/pthreadtypes.h
-    #   which defines real Linux pthread struct layouts that conflict with our stubs.
+    #   which defines real Linux pthread struct layouts that conflict with
+    #   PythonOS pthread definitions.
     TARGET_CFLAGS="-std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
       -mno-red-zone \
       -I${REPO_ROOT}/src/libc/include \
@@ -90,6 +92,12 @@ else
       -DNDEBUG=1 \
       -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
     CONFIGURE_EXTRA=""
+fi
+
+FREE_THREADING="${PYTHONOS_FREE_THREADING:-0}"
+if [[ "$FREE_THREADING" == "1" ]]; then
+    CONFIGURE_EXTRA="$CONFIGURE_EXTRA --disable-gil --with-mimalloc"
+    echo "==> EXPERIMENTAL: configuring CPython free-threading (--disable-gil)"
 fi
 
 echo "==> PythonOS CPython bare-metal setup v${CPYTHON_VERSION} [arch=${ARCH}]"
@@ -188,6 +196,13 @@ if [[ "$ARCH" == "arm64" ]]; then
     cp "$REPO_ROOT/deps/pyconfig_arm64.h" "$CPYTHON_SRC/pyconfig.h"
 else
     cp "$REPO_ROOT/deps/pyconfig.h" "$CPYTHON_SRC/pyconfig.h"
+fi
+if [[ "$FREE_THREADING" == "1" ]]; then
+    sed -i \
+        -e 's|#undef  Py_GIL_DISABLED|#define Py_GIL_DISABLED 1|' \
+        -e '/#define WITH_PYMALLOC/d' \
+        "$CPYTHON_SRC/pyconfig.h"
+    printf '\n#define WITH_MIMALLOC 1\n' >> "$CPYTHON_SRC/pyconfig.h"
 fi
 
 echo "==> Installing Modules/Setup.local..."
@@ -333,7 +348,11 @@ touch Python/frozen_modules/*.h 2>/dev/null || true
 
 # ── 6. Optionally build (Phase 2) ─────────────────────────────────────────────
 if [[ "${1:-}" == "--build" ]] || [[ "${2:-}" == "--build" ]]; then
-    echo "==> Phase 2: Building libpython3.14.a with cross-compiler..."
+    PY_VERSION=$(sed -n 's/^VERSION=[[:space:]]*//p' "$CPYTHON_SRC/Makefile" | head -1 | tr -d '[:space:]')
+    PY_ABIFLAGS=$(sed -n 's/^ABIFLAGS=[[:space:]]*//p' "$CPYTHON_SRC/Makefile" | head -1 | tr -d '[:space:]')
+    LIBPYTHON_ARCHIVE="libpython${PY_VERSION}${PY_ABIFLAGS}.a"
+
+    echo "==> Phase 2: Building ${LIBPYTHON_ARCHIVE} with cross-compiler..."
     echo "    ARCH=$ARCH"
     echo "    CC=$CC"
     echo "    CFLAGS=$TARGET_CFLAGS"
@@ -342,7 +361,7 @@ if [[ "${1:-}" == "--build" ]] || [[ "${2:-}" == "--build" ]]; then
     # effect — make does not track compiler flag changes in its dependency graph.
     echo "==> Cleaning previous build artifacts..."
     find "$CPYTHON_SRC" -name '*.o' -delete 2>/dev/null || true
-    rm -f "$CPYTHON_SRC/libpython3.14.a"
+    rm -f "$CPYTHON_SRC"/libpython*.a
 
     # Pass FREEZE_MODULE overrides on the command line — these survive any
     # Makefile self-regeneration. The Docker/macOS volume mount resolves
@@ -356,7 +375,7 @@ if [[ "${1:-}" == "--build" ]] || [[ "${2:-}" == "--build" ]]; then
     #   PYTHON_FOR_FREEZE            — use python3.14 for non-bootstrap freeze
     # -W Makefile -W Modules/config.c: additionally tell make both are up-to-date
     # so the self-regen recipe is skipped if possible.
-    make -j"$(nproc)" libpython3.14.a \
+    make -j"$(nproc)" "$LIBPYTHON_ARCHIVE" \
         -W Makefile \
         -W Modules/config.c \
         'FREEZE_MODULE_BOOTSTRAP=python3.14 ./Programs/_freeze_module.py' \
@@ -372,12 +391,19 @@ if [[ "${1:-}" == "--build" ]] || [[ "${2:-}" == "--build" ]]; then
 
     # Copy outputs where the Makefile expects them
     mkdir -p "$DEPS_DIR/cpython/Include"
-    cp libpython3.14.a "$DEPS_DIR/cpython/libpython3.14.a"
+    cp "$LIBPYTHON_ARCHIVE" "$DEPS_DIR/cpython/libpython3.14.a"
     cp -r Include/. "$DEPS_DIR/cpython/Include/"
     if [[ "$ARCH" == "arm64" ]]; then
         cp "$REPO_ROOT/deps/pyconfig_arm64.h" "$DEPS_DIR/cpython/pyconfig.h"
     else
         cp "$REPO_ROOT/deps/pyconfig.h" "$DEPS_DIR/cpython/pyconfig.h"
+    fi
+    if [[ "$FREE_THREADING" == "1" ]]; then
+        sed -i \
+            -e 's|#undef  Py_GIL_DISABLED|#define Py_GIL_DISABLED 1|' \
+            -e '/#define WITH_PYMALLOC/d' \
+            "$DEPS_DIR/cpython/pyconfig.h"
+        printf '\n#define WITH_MIMALLOC 1\n' >> "$DEPS_DIR/cpython/pyconfig.h"
     fi
     echo "==> Done. Library: $DEPS_DIR/cpython/libpython3.14.a"
 else

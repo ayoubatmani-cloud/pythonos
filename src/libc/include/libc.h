@@ -2,7 +2,7 @@
  * libc.h — PythonOS minimal libc header.
  *
  * Provides just enough C standard library for CPython to compile and run
- * on bare metal. Included by all src/libc/*.c and included before any
+ * on bare metal. Included by all src/libc C files and included before any
  * CPython headers (pyconfig.h sets _POSIX_C_SOURCE etc. guards, so we
  * need to be careful about conflicts).
  *
@@ -23,13 +23,17 @@ extern int errno;
 #define EINTR     4
 #define ENOMEM   12
 #define EACCES   13
+#define EAGAIN   11
+#define EBUSY    16
 #define EEXIST   17
 #define ENOTDIR  20
 #define EISDIR   21
 #define EINVAL   22
 #define ENOSPC   28
+#define EPERM    1
 #define ENOSYS   38
 #define ENOTSUP  95
+#define ETIMEDOUT 110
 #define EOVERFLOW 75
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -102,6 +106,7 @@ extern FILE *stderr;
 int printf(const char *fmt, ...);
 int fprintf(FILE *f, const char *fmt, ...);
 int sprintf(char *buf, const char *fmt, ...);
+int sscanf(const char *buf, const char *fmt, ...);
 int snprintf(char *buf, size_t n, const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);
 int vfprintf(FILE *f, const char *fmt, va_list ap);
@@ -135,17 +140,20 @@ int ferror(FILE *f);
 void   abort(void) __attribute__((noreturn));
 void   exit(int code) __attribute__((noreturn));
 void   _exit(int code) __attribute__((noreturn));
+int    atexit(void (*fn)(void));
 char  *getenv(const char *name);
 int    setenv(const char *name, const char *val, int overwrite);
 int    unsetenv(const char *name);
 int    getpid(void);
 int    getpagesize(void);
+long   sysconf(int name);
 int    dup2(int oldfd, int newfd);
 int    unlink(const char *path);
 int    rename(const char *old, const char *new);
 int    chdir(const char *path);
 int    rmdir(const char *path);
 int    mkdir(const char *path, unsigned int mode);
+char  *realpath(const char *path, char *resolved_path);
 extern char **environ;
 
 // ── Math (thin wrappers — uses libgcc where possible) ─────────────────────────
@@ -183,10 +191,15 @@ static inline int isfinite(double x) { return __builtin_isfinite(x); }
 #define ULONG_MAX  0xFFFFFFFFFFFFFFFFuL
 #define LLONG_MAX  LONG_MAX
 #define LLONG_MIN  LONG_MIN
+#ifndef SIZE_MAX
 #define SIZE_MAX   ULONG_MAX
+#endif
 #define CHAR_BIT   8
 #define PATH_MAX   4096
 #define NAME_MAX   255
+
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE _SC_PAGESIZE
 
 // ── Signals (stubbed — no processes, no signals) ──────────────────────────────
 #define SIG_DFL  ((void(*)(int))0)
@@ -234,7 +247,7 @@ int sigismember(const sigset_t *set, int sig);
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-// ── pthread (single-core stubs) ───────────────────────────────────────────────
+// ── pthread ──────────────────────────────────────────────────────────────────
 #include "pthread.h"
 
 // ── Locale (stubbed — always "C") ─────────────────────────────────────────────
