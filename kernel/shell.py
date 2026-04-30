@@ -59,6 +59,7 @@ class Shell:
         self._block      = ""         # accumulated multi-line block
         self._cwd        = "/"        # current working directory
         self._ns         = self._build_namespace()
+        self._completion_entries = []
         # Linenoise editing is available iff both raw streams were
         # supplied. The TCP REPL (kernel/net/repl_server.py) and the
         # serial bring-up in kernel/__init__.py wire both; consumers
@@ -117,8 +118,10 @@ class Shell:
         if self._linenoise_ready:
             try:
                 from kernel.linenoise import linenoise_edit
+                self._completion_entries = await self._read_completion_entries()
                 line = await linenoise_edit(prompt, self._read_byte,
-                                             self._write_raw)
+                                             self._write_raw,
+                                             self._complete_filename)
                 # linenoise emits its own \r\n on Enter; for fallback
                 # parity we still want a newline after the line is in
                 # if the user came in via fallback path.
@@ -137,6 +140,17 @@ class Shell:
             if ch == '\n':
                 self._write('\n')
                 return buf
+            if ch == '\t':
+                matches = await self._completion_matches(buf)
+                if matches:
+                    completed = matches[0]
+                    if len(matches) > 1:
+                        completed = self._common_prefix(matches)
+                    if len(completed) > len(buf):
+                        suffix = completed[len(buf):]
+                        buf = completed
+                        self._write(suffix)
+                continue
             if ch == '\b' or ord(ch) == 127:
                 if buf:
                     buf = buf[:-1]
@@ -155,6 +169,76 @@ class Shell:
             _hal.linenoise_history_add(line)
         except Exception:
             pass
+
+    async def _read_completion_entries(self) -> list[str]:
+        from kernel.fs.vfs import vfs, InodeType
+
+        try:
+            names = await vfs.readdir(self._cwd)
+        except Exception:
+            return []
+
+        entries = []
+        for name in names:
+            if name in ('.', '..'):
+                continue
+            completion = name
+            try:
+                st = await vfs.stat(self._join_path(self._cwd, name))
+                if st.inode_type == InodeType.DIR:
+                    completion += "/"
+            except Exception:
+                pass
+            entries.append(completion)
+        entries.sort()
+        return entries
+
+    async def _completion_matches(self, line: str) -> list[str]:
+        self._completion_entries = await self._read_completion_entries()
+        return self._complete_filename(line)
+
+    def _complete_filename(self, line: str) -> list[str]:
+        return self._filename_completion_candidates(
+            line, self._completion_entries)
+
+    @staticmethod
+    def _filename_completion_candidates(line: str,
+                                        entries: list[str]) -> list[str]:
+        delimiters = " \t\r\n'\"`({[=,:;"
+        start = len(line)
+        while start > 0 and line[start - 1] not in delimiters:
+            start -= 1
+
+        token = line[start:]
+        leading = ""
+        prefix = token
+        if token.startswith("./"):
+            leading = "./"
+            prefix = token[2:]
+        if "/" in prefix:
+            return []
+
+        head = line[:start]
+        return [
+            head + leading + entry
+            for entry in entries
+            if entry.startswith(prefix)
+        ]
+
+    @staticmethod
+    def _common_prefix(items: list[str]) -> str:
+        if not items:
+            return ""
+        prefix = items[0]
+        for item in items[1:]:
+            i = 0
+            limit = min(len(prefix), len(item))
+            while i < limit and prefix[i] == item[i]:
+                i += 1
+            prefix = prefix[:i]
+            if not prefix:
+                break
+        return prefix
 
     async def run(self) -> None:
         self._write("\nPythonOS kernel shell\n")
@@ -381,15 +465,28 @@ class Shell:
             self._write("sh: " + name + ": command not found\n")
 
     def _sh_script_path(self, name: str) -> str | None:
-        if "/" not in name or not name.endswith(".py"):
+        if not name.endswith(".py"):
             return None
         if name.startswith("/"):
             target = name
         else:
-            target = self._cwd.rstrip("/") + "/" + name
+            target = self._join_path(self._cwd, name)
 
+        return self._normalize_path(target)
+
+    @staticmethod
+    def _join_path(base: str, path: str) -> str:
+        if path.startswith("/"):
+            return path
+        base = base.rstrip("/")
+        if not base:
+            return "/" + path
+        return base + "/" + path
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
         parts = []
-        for seg in target.split("/"):
+        for seg in path.split("/"):
             if seg == "..":
                 if parts:
                     parts.pop()
@@ -448,6 +545,7 @@ class Shell:
             "  run('/path')   — run script by absolute path\n"
             "  sh()           — enter shell sub-REPL\n"
             "  sh('cmd args') — same, with shell-style argument splitting\n"
+            "  foo.py         — in sh(), run a Python file from cwd\n"
             "  /path/file.py  — in sh(), run a Python file directly\n"
             "\nLive kernel objects:\n"
             "  pci        — PCI bus: list(pci), pci.find_by_class(0x0200)\n"

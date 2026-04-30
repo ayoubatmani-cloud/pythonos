@@ -209,6 +209,27 @@ def run() -> int:
                 print(f"       got: {response[:200]!r}")
                 failed += 1
 
+        entered_sh = _send_and_wait("sh()\n", end="$ ")
+        if not entered_sh:
+            print("[FAIL] sh() did not enter shell mode")
+            failed += 1
+        else:
+            cd_response = _send_and_wait("cd /bin\n", end="$ ")
+            tab_response = _send_and_wait("sys\t\n", end="cwd: /bin")
+            prompt_response = _send_and_wait("", end="$ ")
+            exit_response = _send_and_wait("exit\n", end=">>> ")
+            if (not cd_response or not tab_response or
+                    not prompt_response or not exit_response):
+                print("[FAIL] sh() tab-completion flow did not return prompts")
+                failed += 1
+            elif "PythonOS" in tab_response:
+                print("[PASS] sh() filename tab completion          -> ran sysinfo.py")
+                passed += 1
+            else:
+                print("[FAIL] sh() filename tab completion          -> expected PythonOS")
+                print(f"       got: {tab_response[:200]!r}")
+                failed += 1
+
         # pthread_coverage exercises multiple workers and repeated lock
         # cycles — give it a generous deadline.
         cov = _send_and_wait("run('/examples/pthread_coverage.py')\n",

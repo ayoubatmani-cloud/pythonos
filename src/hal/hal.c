@@ -607,6 +607,7 @@ typedef struct {
     char buf[LN_BUF_SIZE];
     int pending_byte;            /* -1 when no byte queued */
     PyObject *write_callback;    /* owned reference */
+    PyObject *completion_callback; /* owned reference */
 } ln_session_t;
 
 static ln_session_t ln_sessions[LN_MAX_SESSIONS];
@@ -634,6 +635,46 @@ static int ln_async_write_hook(int fd, const char *buf, size_t n) {
     return 1;
 }
 
+static void ln_async_completion_callback(const char *buf,
+                                         linenoiseCompletions *lc) {
+    if (ln_active_session < 0) return;
+    PyObject *cb = ln_sessions[ln_active_session].completion_callback;
+    if (!cb) return;
+
+    PyObject *arg = PyUnicode_FromString(buf ? buf : "");
+    if (!arg) { PyErr_Clear(); return; }
+    PyObject *result = PyObject_CallOneArg(cb, arg);
+    Py_DECREF(arg);
+    if (!result) { PyErr_Clear(); return; }
+    if (result == Py_None) {
+        Py_DECREF(result);
+        return;
+    }
+
+    PyObject *iter = PyObject_GetIter(result);
+    Py_DECREF(result);
+    if (!iter) { PyErr_Clear(); return; }
+
+    PyObject *item;
+    while ((item = PyIter_Next(iter)) != NULL) {
+        PyObject *text = PyObject_Str(item);
+        Py_DECREF(item);
+        if (!text) {
+            PyErr_Clear();
+            continue;
+        }
+        const char *s = PyUnicode_AsUTF8(text);
+        if (s) {
+            linenoiseAddCompletion(lc, s);
+        } else {
+            PyErr_Clear();
+        }
+        Py_DECREF(text);
+    }
+    Py_DECREF(iter);
+    if (PyErr_Occurred()) PyErr_Clear();
+}
+
 static int ln_count_active(void) {
     int n = 0;
     for (int i = 0; i < LN_MAX_SESSIONS; i++) {
@@ -646,6 +687,7 @@ static void ln_install_global_hooks(void) {
     if (ln_global_hooks_installed) return;
     libc_set_stdin_byte_reader(ln_async_byte_reader);
     libc_set_stdout_write_hook(ln_async_write_hook);
+    linenoiseSetCompletionCallback(ln_async_completion_callback);
     ln_global_hooks_installed = 1;
 }
 
@@ -653,6 +695,7 @@ static void ln_uninstall_global_hooks(void) {
     if (!ln_global_hooks_installed) return;
     libc_set_stdin_byte_reader(NULL);
     libc_set_stdout_write_hook(NULL);
+    linenoiseSetCompletionCallback(NULL);
     ln_global_hooks_installed = 0;
 }
 
@@ -666,7 +709,9 @@ static int ln_alloc_session(void) {
 static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
     const char *prompt = "";
     PyObject *write_cb = NULL;
-    if (!PyArg_ParseTuple(args, "|sO", &prompt, &write_cb)) return NULL;
+    PyObject *completion_cb = NULL;
+    if (!PyArg_ParseTuple(args, "|sOO", &prompt, &write_cb,
+                          &completion_cb)) return NULL;
 
     int slot = ln_alloc_session();
     if (slot < 0) {
@@ -678,6 +723,7 @@ static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
     sess->in_use = 1;
     sess->pending_byte = -1;
     sess->write_callback = NULL;
+    sess->completion_callback = NULL;
     if (write_cb && write_cb != Py_None) {
         if (!PyCallable_Check(write_cb)) {
             sess->in_use = 0;
@@ -687,6 +733,18 @@ static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
         }
         Py_INCREF(write_cb);
         sess->write_callback = write_cb;
+    }
+    if (completion_cb && completion_cb != Py_None) {
+        if (!PyCallable_Check(completion_cb)) {
+            Py_XDECREF(sess->write_callback);
+            sess->write_callback = NULL;
+            sess->in_use = 0;
+            PyErr_SetString(PyExc_TypeError,
+                            "completion callback must be callable or None");
+            return NULL;
+        }
+        Py_INCREF(completion_cb);
+        sess->completion_callback = completion_cb;
     }
 
     /* Install global hooks if first session, and route them to this
@@ -703,7 +761,9 @@ static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
 
     if (rc != 0) {
         Py_XDECREF(sess->write_callback);
+        Py_XDECREF(sess->completion_callback);
         sess->write_callback = NULL;
+        sess->completion_callback = NULL;
         sess->in_use = 0;
         if (ln_count_active() == 0) {
             ln_uninstall_global_hooks();
@@ -762,7 +822,9 @@ static PyObject *py_linenoise_edit_stop(PyObject *self, PyObject *args) {
         sess->in_use = 0;
     }
     Py_XDECREF(sess->write_callback);
+    Py_XDECREF(sess->completion_callback);
     sess->write_callback = NULL;
+    sess->completion_callback = NULL;
     sess->pending_byte = -1;
     if (ln_count_active() == 0) {
         ln_uninstall_global_hooks();
@@ -832,7 +894,7 @@ static PyMethodDef hal_methods[] = {
     {"linenoise_history_set_max_len", py_linenoise_history_set_max_len, METH_VARARGS, "Set linenoise history capacity"},
     {"linenoise_clear_screen", py_linenoise_clear_screen, METH_NOARGS, "Clear the terminal screen via VT100 escapes"},
     {"linenoise_set_multi_line", py_linenoise_set_multi_line, METH_VARARGS, "Enable/disable linenoise multi-line edit mode"},
-    {"linenoise_edit_start", py_linenoise_edit_start, METH_VARARGS, "Begin a non-blocking linenoise edit (prompt, write_callback)"},
+    {"linenoise_edit_start", py_linenoise_edit_start, METH_VARARGS, "Begin a non-blocking linenoise edit (prompt, write_callback, completion_callback)"},
     {"linenoise_edit_feed_byte", py_linenoise_edit_feed_byte, METH_VARARGS, "Feed one input byte; returns the completed line (Enter), '' (EOF), or None for more"},
     {"linenoise_edit_stop", py_linenoise_edit_stop, METH_VARARGS, "End the non-blocking linenoise edit (slot)"},
     {"smp_run_selftest", py_smp_run_selftest, METH_NOARGS, "Run a worker self-test on each online AP (returns (executed, total_cpus))"},

@@ -16,14 +16,16 @@ the completed line as a string, or None if the user cancelled
 import _hal
 
 
-async def linenoise_edit(prompt, read_char, write):
+async def linenoise_edit(prompt, read_char, write, complete=None):
     """Drive a non-blocking linenoise edit from a coroutine.
 
     `prompt` is the prompt to display.
     `read_char` is an awaitable returning one character (or one byte).
     `write` is a callable that accepts a str and emits it to the
-    transport (terminal, TCP socket, ...). The wrapper installs a
-    bytes-oriented bridge so linenoise's VT100 escapes flow through.
+    transport (terminal, TCP socket, ...). `complete`, when supplied,
+    is a synchronous callable accepting the current line and returning
+    full-line completion candidates. The wrapper installs a bytes-
+    oriented bridge so linenoise's VT100 escapes flow through.
     """
     def _write_bytes(buf):
         # _hal hands us bytes; the shell's `write` callback accepts str.
@@ -33,7 +35,7 @@ async def linenoise_edit(prompt, read_char, write):
             text = ""
         write(text)
 
-    slot = _hal.linenoise_edit_start(prompt, _write_bytes)
+    slot = _hal.linenoise_edit_start(prompt, _write_bytes, complete)
     try:
         while True:
             ch = await read_char()

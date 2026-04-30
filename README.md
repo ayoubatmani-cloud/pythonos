@@ -158,8 +158,9 @@ $ exit
 '/tmp'
 ```
 
-Inside `sh()`, explicit `.py` paths run directly. Python files are native
-executables in PythonOS.
+Inside `sh()`, `.py` paths run directly, and `foo.py` resolves like
+`./foo.py` from the current directory. Python files are native executables in
+PythonOS.
 
 `sh('cmd args')` is the single-shot form for scripted use:
 
