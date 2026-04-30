@@ -1,18 +1,81 @@
 # PythonOS build system — GNU make required (gmake on macOS: brew install make)
 #
 # All compilation happens inside Docker (cross-toolchain + python3.14 guaranteed).
-# QEMU runs on the host to boot the resulting ISO.
+# QEMU runs on the host to boot the resulting ISO/ELF.
+#
+# Top-level targets default to the *host* architecture so local dev cycles
+# don't unnecessarily emulate a non-native CPU. Override with
+# `make TARGET_ARCH=arm64` or `make TARGET_ARCH=x86_64` to cross-build, or
+# call the explicit per-arch targets directly (`make x86_64`, `make arm64`,
+# `make run-x86_64`, `make run-arm64`, `make test-x86_64`, `make test-arm64`).
 #
 # First-time setup (takes ~10 min to cross-compile libpython):
 #   make
 #
 # Subsequent builds (fast — libpython is cached):
-#   make          # rebuild kernel + ISO if sources changed
-#   make run      # rebuild if needed, then boot in QEMU (serial console)
+#   make          # build for the host architecture
+#   make run      # build if needed, then boot in QEMU (serial console)
+#   make test     # build, boot, run smoke test
 #   make stop     # kill running QEMU instance
 #   make clean    # remove build artifacts (keeps libpython cache)
 #   make cleanall # remove everything including libpython
 
+# ── Host architecture and acceleration detection ─────────────────────────────
+# `uname -m` reports the running kernel's CPU arch. Apple Silicon Macs report
+# "arm64", Linux on ARM reports "aarch64", x86_64 hosts report "x86_64". Map
+# both ARM forms to our internal "arm64" label.
+HOST_UNAME_M := $(shell uname -m)
+ifeq ($(HOST_UNAME_M),arm64)
+HOST_ARCH := arm64
+else ifeq ($(HOST_UNAME_M),aarch64)
+HOST_ARCH := arm64
+else
+HOST_ARCH := x86_64
+endif
+
+HOST_OS := $(shell uname -s)
+ifeq ($(HOST_OS),Darwin)
+HOST_ACCEL := hvf
+else ifeq ($(HOST_OS),Linux)
+HOST_ACCEL := kvm
+else
+HOST_ACCEL :=
+endif
+
+# TARGET_ARCH: which arch the dispatch targets (all/run/test/stop/restart)
+# build and run. Defaults to the host architecture so `make` does the
+# obvious thing on every machine. Set it explicitly to cross-build.
+TARGET_ARCH ?= $(HOST_ARCH)
+
+# Acceleration: when guest matches host and an accelerator is available, use
+# it (HVF on macOS, KVM on Linux). Otherwise fall back to TCG. Each per-arch
+# QEMU flag set picks up the right flag below.
+QEMU_X86_ACCEL :=
+QEMU_X86_CPU   := -cpu qemu64
+ifeq ($(HOST_ARCH),x86_64)
+ifneq ($(HOST_ACCEL),)
+QEMU_X86_ACCEL := -accel $(HOST_ACCEL)
+QEMU_X86_CPU   := -cpu host
+endif
+endif
+
+# arm64 HVF would normally accelerate native runs on Apple Silicon, but our
+# kernel only implements GICv2 and HVF on Apple Silicon mandates GICv3. Keep
+# arm64 on TCG until GICv3 lands (tracked by pythonos-h7g). Override with
+# `make ARM64_HVF=1 ...` to opt into the broken combo for debugging.
+ARM64_HVF ?= 0
+QEMU_ARM64_ACCEL :=
+QEMU_ARM64_CPU   := -cpu cortex-a57
+ifeq ($(HOST_ARCH),arm64)
+ifneq ($(HOST_ACCEL),)
+ifeq ($(ARM64_HVF),1)
+QEMU_ARM64_ACCEL := -accel $(HOST_ACCEL)
+QEMU_ARM64_CPU   := -cpu host
+endif
+endif
+endif
+
+# Internal arch label used by the x86_64 build paths below; do not change.
 ARCH       := x86_64
 ISO_OUT    := pythonos.iso
 DOCKER_IMG := pythonos-builder
@@ -24,7 +87,7 @@ ARM64_FILE_HOST_PORT ?= 17002
 SMP_CPUS ?= $(if $(PYTHONOS_SMP_CPUS),$(PYTHONOS_SMP_CPUS),2)
 PYTHONOS_FREE_THREADING ?= 1
 
-QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G -smp $(SMP_CPUS) \
+QEMU_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SMP_CPUS) \
               -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
@@ -32,27 +95,39 @@ QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G -smp $(SMP_CPUS) \
 
 # ── User-facing targets ───────────────────────────────────────────────────────
 
-.PHONY: all run start stop restart test test-arm64 clean cleanall docker-build \
+.PHONY: all run start stop restart test clean cleanall docker-build \
         _freeze _iso _libpython \
-        arm64 run-arm64 stop-arm64 _iso_arm64
+        x86_64 run-x86_64 stop-x86_64 test-x86_64 \
+        arm64 run-arm64 stop-arm64 test-arm64 _iso_arm64
 
-all: $(ISO_OUT)
+# Top-level dispatch. These pick x86_64 or arm64 based on TARGET_ARCH (which
+# defaults to the host arch). Explicit per-arch targets are listed below.
+ifeq ($(TARGET_ARCH),arm64)
+all:    arm64
+run:    run-arm64
+stop:   stop-arm64
+test:   test-arm64
+else
+all:    x86_64
+run:    run-x86_64
+stop:   stop-x86_64
+test:   test-x86_64
+endif
 
-run: $(ISO_OUT)
-	qemu-system-$(ARCH) $(QEMU_FLAGS)
-
-start: run
-
-stop:
-	@pkill -f "qemu-system-$(ARCH).*$(ISO_OUT)" || echo "No QEMU instance running."
-
+start:   run
 restart: stop start
 
-test: $(ISO_OUT)
-	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) PYTHONOS_SMP_CPUS=$(SMP_CPUS) PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) python3 tests/smoke_test.py $(ISO_OUT)
+# Explicit x86_64 targets (also reachable as the dispatch default on x86 hosts).
+x86_64: $(ISO_OUT)
 
-test-arm64: $(ARM64_ELF) $(ARM64_DISK)
-	PYTHONOS_ARM64_HOST_PORT=$(ARM64_REPL_HOST_PORT) PYTHONOS_ARM64_FILE_PORT=$(ARM64_FILE_HOST_PORT) PYTHONOS_ARM64_DISK=$(ARM64_DISK) python3 tests/smoke_test_arm64.py $(ARM64_ELF)
+run-x86_64: $(ISO_OUT)
+	qemu-system-x86_64 $(QEMU_FLAGS)
+
+stop-x86_64:
+	@pkill -f "qemu-system-x86_64.*$(ISO_OUT)" || echo "No x86_64 QEMU running."
+
+test-x86_64: $(ISO_OUT)
+	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) PYTHONOS_SMP_CPUS=$(SMP_CPUS) PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) python3 tests/smoke_test.py $(ISO_OUT)
 
 clean:
 	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
@@ -253,7 +328,7 @@ ARM64_ELF        := pythonos-arm64.elf
 LIBPYTHON_ARM64  := deps-arm64/cpython/libpython3.14.a
 
 ARM64_SMP_CPUS ?= 2
-QEMU_ARM64_FLAGS := -machine virt -cpu cortex-a57 -m 2G -smp $(ARM64_SMP_CPUS) \
+QEMU_ARM64_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2G -smp $(ARM64_SMP_CPUS) \
                     -no-reboot -no-shutdown \
                     -nographic -serial mon:stdio \
                     -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1
@@ -276,6 +351,9 @@ run-arm64: $(ARM64_ELF) $(ARM64_DISK)
 
 stop-arm64:
 	@pkill -f "qemu-system-aarch64.*$(ARM64_ELF)" || echo "No arm64 QEMU running."
+
+test-arm64: $(ARM64_ELF) $(ARM64_DISK)
+	PYTHONOS_ARM64_HOST_PORT=$(ARM64_REPL_HOST_PORT) PYTHONOS_ARM64_FILE_PORT=$(ARM64_FILE_HOST_PORT) PYTHONOS_ARM64_DISK=$(ARM64_DISK) python3 tests/smoke_test_arm64.py $(ARM64_ELF)
 
 # arm64 libpython defaults to GIL-enabled because Py_GIL_DISABLED hangs
 # Py_InitializeFromConfig on aarch64-elf in our build environment (tracked

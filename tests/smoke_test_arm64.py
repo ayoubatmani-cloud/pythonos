@@ -40,9 +40,33 @@ DISK = os.environ.get("PYTHONOS_ARM64_DISK", "disk-arm64.img")
 SMP_CPUS = os.environ.get("PYTHONOS_ARM64_SMP_CPUS", "2")
 BOOT_TIMEOUT = float(os.environ.get("PYTHONOS_ARM64_BOOT_TIMEOUT", "60"))
 
+import platform
+
+
+def _qemu_accel_for(target_arch: str) -> list:
+    """HVF/KVM when guest matches host arch; generic CPU under TCG when
+    cross-emulating. arm64 HVF on Apple Silicon requires GICv3, which our
+    kernel doesn't implement, so arm64 stays on TCG until pythonos-h7g
+    lands. Mirrors the GNUMakefile policy."""
+    host_machine = platform.machine().lower()
+    host_arch = "arm64" if host_machine in ("arm64", "aarch64") else "x86_64"
+    host_os = platform.system()
+    if host_arch != target_arch:
+        return ["-cpu", "qemu64" if target_arch == "x86_64" else "cortex-a57"]
+    if target_arch == "arm64":
+        # HVF requires GICv3; defer to TCG.
+        return ["-cpu", "cortex-a57"]
+    accel = "hvf" if host_os == "Darwin" else ("kvm" if host_os == "Linux" else None)
+    if accel:
+        return ["-cpu", "host", "-accel", accel]
+    return ["-cpu", "qemu64"]
+
+
 QEMU_CMD = [
     "qemu-system-aarch64",
-    "-machine", "virt", "-cpu", "cortex-a57", "-m", "2G", "-smp", SMP_CPUS,
+    "-machine", "virt",
+    *_qemu_accel_for("arm64"),
+    "-m", "2G", "-smp", SMP_CPUS,
     "-no-reboot", "-no-shutdown", "-nographic",
     "-drive", f"if=none,file={DISK},format=raw,id=hd0",
     "-device", "virtio-blk-device,drive=hd0",

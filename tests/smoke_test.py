@@ -19,6 +19,8 @@ import tempfile
 import time
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
+import platform
+
 HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
 FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "17000"))
 SMP_CPUS = os.environ.get("PYTHONOS_SMP_CPUS", "2")
@@ -26,9 +28,31 @@ FREE_THREADING = os.environ.get("PYTHONOS_FREE_THREADING", "1")
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 
+
+def _qemu_accel_for(target_arch: str) -> list:
+    """Match the GNUMakefile policy: hardware acceleration (HVF/KVM) when
+    the guest matches the host architecture, plain TCG with a generic CPU
+    otherwise. arm64 HVF on Apple Silicon requires GICv3 (not yet
+    implemented; tracked by pythonos-h7g), so arm64 stays on TCG even
+    when running natively."""
+    host_machine = platform.machine().lower()
+    host_arch = "arm64" if host_machine in ("arm64", "aarch64") else "x86_64"
+    host_os = platform.system()
+    if host_arch != target_arch:
+        return ["-cpu", "qemu64" if target_arch == "x86_64" else "cortex-a57"]
+    if target_arch == "arm64":
+        return ["-cpu", "cortex-a57"]
+    accel = "hvf" if host_os == "Darwin" else ("kvm" if host_os == "Linux" else None)
+    if accel:
+        return ["-cpu", "host", "-accel", accel]
+    return ["-cpu", "qemu64"]
+
+
 QEMU_CMD = [
     "qemu-system-x86_64",
-    "-machine", "q35", "-cpu", "qemu64", "-m", "2G", "-smp", SMP_CPUS,
+    "-machine", "q35",
+    *_qemu_accel_for("x86_64"),
+    "-m", "2G", "-smp", SMP_CPUS,
     "-netdev", f"user,id=net0,hostfwd=tcp::{HOST_PORT}-:5000,hostfwd=tcp::{FILE_HOST_PORT}-:7000",
     "-device", "virtio-net-pci,netdev=net0",
     "-device", "intel-hda", "-device", "hda-duplex",
