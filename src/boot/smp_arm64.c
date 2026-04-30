@@ -182,8 +182,18 @@ void smp_init(void *mb2_info) {
     /* Probe MPIDR Aff0 = 1..ARM64_MAX_CPUS-1. QEMU virt with -smp N
      * exposes cores at sequential Aff0 values. PSCI returns 0 on
      * success and a negative error otherwise; once we hit a missing
-     * core we stop probing. */
-    uint64_t base_mpidr = cpus[0].mpidr & ~0xFFULL;
+     * core we stop probing.
+     *
+     * PSCI target_cpu only encodes Aff0..Aff3 (bits 7:0, 15:8, 23:16,
+     * 39:32). The RES1 bit (31), U bit (30), and MT bit (24) of
+     * MPIDR_EL1 must be 0 in target_cpu — passing them through trips
+     * NOT_SUPPORTED on QEMU. We therefore preserve only the affinity
+     * fields from the BSP's MPIDR; for our single-cluster layout
+     * that's all-zero plus the new Aff0. */
+    uint64_t base_mpidr = cpus[0].mpidr &
+                          (0xFFULL << 32 |  /* Aff3 */
+                           0xFFULL << 16 |  /* Aff2 */
+                           0xFFULL << 8);   /* Aff1 */
     for (uint32_t i = 1; i < ARM64_MAX_CPUS; i++) {
         uint64_t target = base_mpidr | (uint64_t)i;
         if (!try_psci_cpu_on(i, target)) {

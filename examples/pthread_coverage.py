@@ -51,12 +51,14 @@ def _arch():
 def _workers_supported():
     """Whether pthread workers can run on this build.
 
-    arm64 currently stubs pthread_create to ENOSYS (see
-    src/libc/pthread.c). The corresponding substrate work is tracked in
-    beads epic pythonos-bjr; until that lands, sections that rely on
-    _thread.start_new_thread are skipped on arm64.
+    Both archs implement pthread_create on top of smp_submit_worker now
+    (pythonos-bjr). The only requirement for the worker-using sections
+    is that at least one AP is online — the kernel surfaces this via
+    _hal.SMP_ONLINE.
     """
-    return _arch() == "x86_64"
+    if _hal is None:
+        return False
+    return getattr(_hal, "SMP_ONLINE", 1) >= 2
 
 
 def _spin(n):

@@ -1,65 +1,47 @@
 #!/usr/bin/env python3
 """
-Boot smoke test for PythonOS arm64.
+Boot + interactive smoke test for PythonOS arm64.
 
-The arm64 kernel boots through the same kernel.boot() path as x86 but
-runs an interactive shell on the PL011 serial line — it does not start
-a TCP REPL because there is no PCI on QEMU virt and we have not wired
-up VirtIO-MMIO networking yet. Rather than try to drive an interactive
-serial REPL from a host script (which is its own nontrivial dance with
-QEMU's terminal, raw mode, and timing), this smoke test boots the
-kernel under QEMU, waits a fixed budget, then asserts that the serial
-log contains every line we expect a healthy boot to emit.
+Boots the kernel ELF under QEMU virt with PL011 connected to stdio,
+then drives the kernel shell over those pipes — arm64 has no TCP REPL
+(no PCI on virt and no MMIO net driver yet) so we talk directly to
+the serial console. The same connection captures the early boot log
+so we can also assert on the "kernel reached main loop" markers.
 
-This catches the things we actually want to catch:
-  * Boot reached EL drop, MMU, GIC, timer, SMP init.
-  * Python interpreter reached Py_Initialize done (so libpython is
-    healthy on aarch64-elf).
-  * kernel.boot() ran to completion and the async main loop took over.
-  * The PL011 serial input handler is ready (so the kernel is happy to
-    take user input on the serial line).
-
-Failures land on the actual cause via the captured serial log printed
-to stdout on test failure.
+Asserts:
+  * Boot reaches kernel.boot main loop with both CPUs online (-smp 2).
+  * _hal.SMP_ONLINE reports the right number.
+  * pthread coverage example runs all six sections to passed=6/6
+    (lifecycle, identity, tss, lock, capacity, attr).
 
 Usage:
     python3 tests/smoke_test_arm64.py [path/to/pythonos-arm64.elf]
-
-Exit code: 0 = all markers found, 1 = one or more missing.
 """
 
-import atexit
 import os
+import platform
+import re
 import subprocess
 import sys
-import tempfile
 import time
 
 ELF = sys.argv[1] if len(sys.argv) > 1 else "pythonos-arm64.elf"
 DISK = os.environ.get("PYTHONOS_ARM64_DISK", "disk-arm64.img")
 SMP_CPUS = os.environ.get("PYTHONOS_ARM64_SMP_CPUS", "2")
 BOOT_TIMEOUT = float(os.environ.get("PYTHONOS_ARM64_BOOT_TIMEOUT", "60"))
-
-import platform
+RECV_TIMEOUT = float(os.environ.get("PYTHONOS_ARM64_RECV_TIMEOUT", "60"))
 
 
 def _qemu_accel_for(target_arch: str) -> list:
-    """HVF/KVM when guest matches host arch; generic CPU under TCG when
-    cross-emulating. arm64 HVF on Apple Silicon requires GICv3, which our
-    kernel doesn't implement, so arm64 stays on TCG until pythonos-h7g
-    lands. Mirrors the GNUMakefile policy."""
     host_machine = platform.machine().lower()
     host_arch = "arm64" if host_machine in ("arm64", "aarch64") else "x86_64"
-    host_os = platform.system()
     if host_arch != target_arch:
         return ["-cpu", "qemu64" if target_arch == "x86_64" else "cortex-a57"]
     if target_arch == "arm64":
-        # HVF requires GICv3; defer to TCG.
+        # HVF on Apple Silicon needs GICv3 (pythonos-nz1); stay on TCG.
         return ["-cpu", "cortex-a57"]
-    accel = "hvf" if host_os == "Darwin" else ("kvm" if host_os == "Linux" else None)
-    if accel:
-        return ["-cpu", "host", "-accel", accel]
-    return ["-cpu", "qemu64"]
+    accel = "hvf" if platform.system() == "Darwin" else "kvm"
+    return ["-cpu", "host", "-accel", accel]
 
 
 QEMU_CMD = [
@@ -67,22 +49,24 @@ QEMU_CMD = [
     "-machine", "virt",
     *_qemu_accel_for("arm64"),
     "-m", "2G", "-smp", SMP_CPUS,
-    "-no-reboot", "-no-shutdown", "-nographic",
+    "-no-reboot", "-no-shutdown",
+    "-display", "none",
+    "-monitor", "none",
+    "-serial", "stdio",
     "-drive", f"if=none,file={DISK},format=raw,id=hd0",
     "-device", "virtio-blk-device,drive=hd0",
     "-kernel", ELF,
 ]
 
-# Markers we expect to see in serial output on a healthy boot. Each entry
-# is (label, substring); ordering is informational only.
-REQUIRED_MARKERS = [
+
+BOOT_MARKERS = [
     ("boot: serial",        "[PythonOS/arm64] boot: serial OK"),
     ("boot: MMU enabled",   "[PythonOS/arm64] boot: MMU enabled"),
     ("boot: TLS",           "[PythonOS/arm64] boot: TLS initialized"),
     ("boot: VBAR",          "[PythonOS/arm64] boot: VBAR set"),
     ("boot: GIC",           "[PythonOS/arm64] boot: GIC initialized"),
     ("boot: timer",         "[PythonOS/arm64] boot: timer started"),
-    ("boot: SMP init",      "[PythonOS/arm64] boot: SMP init complete, online="),
+    ("boot: SMP online=N",  f"boot: SMP init complete, online={SMP_CPUS}"),
     ("boot: Python kernel", "[PythonOS/arm64] boot: starting Python kernel"),
     ("hal: AppendInittab",  "[hal] AppendInittab"),
     ("hal: Py_Initialize",  "[hal] Py_Initialize done"),
@@ -96,88 +80,165 @@ REQUIRED_MARKERS = [
 ]
 
 
-def _print_serial(path: str) -> None:
-    try:
-        with open(path) as f:
-            content = f.read()
-        if content.strip():
-            print(f"\n--- serial log ({path}) ---")
-            print(content[-4000:] if len(content) > 4000 else content)
-            print("--- end serial log ---")
-        else:
-            print("[smoke-arm64] (serial log is empty)")
-    except OSError:
-        pass
+# Bytes-or-str helper: stdio from Popen is bytes when bufsize=0/text=False.
+def _decode(b):
+    if isinstance(b, (bytes, bytearray)):
+        return b.decode("utf-8", errors="replace")
+    return b
+
+
+def _read_until(proc, needle: str, timeout: float, accumulator: list,
+                trace: bool = False, search_from: int = 0) -> bool:
+    """Read stdout from `proc` until `needle` appears in the accumulator
+    AT OR AFTER character index `search_from`. Returns True on success,
+    False on timeout or proc exit. Bytes read are appended to
+    `accumulator` so the caller can inspect."""
+    deadline = time.monotonic() + timeout
+    fd = proc.stdout.fileno()
+    import select
+    # Check if the needle is already past the offset we care about.
+    if needle in "".join(accumulator)[search_from:]:
+        return True
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        ready, _, _ = select.select([fd], [], [], 0.5)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            return False
+        if not chunk:
+            return False
+        text = _decode(chunk)
+        accumulator.append(text)
+        if trace:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        if needle in "".join(accumulator)[search_from:]:
+            return True
+    return False
+
+
+def _send(proc, data: str) -> None:
+    proc.stdin.write(data.encode("utf-8") if isinstance(data, str) else data)
+    proc.stdin.flush()
 
 
 def run() -> int:
     if not os.path.exists(ELF):
         print(f"[FAIL] arm64 ELF not found: {ELF}")
-        print("       Run 'make arm64' first.")
         return 1
     if not os.path.exists(DISK):
         print(f"[FAIL] arm64 disk image not found: {DISK}")
-        print("       Run 'make arm64' first (it creates a blank disk).")
         return 1
-
-    serial_log = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".log", prefix="pythonos-arm64-serial-",
-        delete=False
-    )
-    serial_log.close()
-    atexit.register(lambda: os.unlink(serial_log.name)
-                    if os.path.exists(serial_log.name) else None)
-
-    cmd = QEMU_CMD + ["-serial", f"file:{serial_log.name}"]
 
     print(f"[smoke-arm64] Starting QEMU with {ELF} (-smp {SMP_CPUS}) ...")
-    print(f"[smoke-arm64] Serial log: {serial_log.name}")
-    print(f"[smoke-arm64] Boot budget: {BOOT_TIMEOUT}s")
+    proc = subprocess.Popen(QEMU_CMD,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            bufsize=0)
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE)
+    try:
+        stream: list = []
 
-    final_marker = REQUIRED_MARKERS[-1][1]
-    deadline = time.monotonic() + BOOT_TIMEOUT
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            break
-        try:
-            with open(serial_log.name) as f:
-                content = f.read()
-            if final_marker in content:
+        # ── Phase 1: wait for the kernel to land in its main loop ────────────
+        if not _read_until(proc, "kernel: PL011 serial input ready",
+                           BOOT_TIMEOUT, stream):
+            print("[FAIL] kernel never reached PL011 serial input ready")
+            print("--- captured output ---")
+            print("".join(stream)[-4000:])
+            return 1
+
+        # Wait for the shell prompt so subsequent stdin lands on the REPL.
+        if not _read_until(proc, ">>> ", BOOT_TIMEOUT, stream):
+            print("[FAIL] shell prompt never appeared")
+            print("--- captured output ---")
+            print("".join(stream)[-4000:])
+            return 1
+
+        captured = "".join(stream)
+        passed = 0
+        failed = 0
+        for label, substr in BOOT_MARKERS:
+            if substr in captured:
+                print(f"[PASS] {label:30s} -> found {substr!r}")
+                passed += 1
+            else:
+                print(f"[FAIL] {label:30s} -> missing {substr!r}")
+                failed += 1
+
+        # ── Phase 2: drive the shell over the same serial pipe ───────────────
+        # Send a couple of basic Python expressions to make sure the REPL is
+        # responsive, then run pthread_coverage and assert all six markers.
+        # The kernel's serial driver wraps output at 80 columns, so
+        # substring matching has to ignore embedded \r / \n that fall mid-token.
+        def _flat() -> str:
+            return "".join(stream).replace("\r", "").replace("\n", "")
+
+        # Snapshot the stream length so each command's response can be
+        # examined in isolation (avoids accidentally matching earlier
+        # output and lets us detect the *next* >>> prompt reliably).
+        def _send_and_wait(expr: str, end: str = ">>> ",
+                           timeout: float = RECV_TIMEOUT) -> str:
+            mark = sum(len(s) for s in stream)
+            _send(proc, expr)
+            if not _read_until(proc, end, timeout, stream,
+                               search_from=mark):
+                return ""
+            after = "".join(stream)[mark:]
+            return after.replace("\r", "").replace("\n", "")
+
+        for expr, expected in [
+            ("1 + 1\n", "2"),
+            (f"__import__('_hal').SMP_ONLINE\n", SMP_CPUS),
+            ("__import__('_hal').ARCH\n", "'arm64'"),
+        ]:
+            response = _send_and_wait(expr)
+            if not response:
+                print(f"[FAIL] shell did not respond to {expr.strip()!r}")
+                failed += 1
                 break
-        except OSError:
-            pass
-        time.sleep(1.0)
+            if expected in response:
+                print(f"[PASS] {expr.strip()!r:40s} -> found {expected!r}")
+                passed += 1
+            else:
+                print(f"[FAIL] {expr.strip()!r:40s} -> expected {expected!r}")
+                print(f"       got: {response[:200]!r}")
+                failed += 1
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-
-    try:
-        with open(serial_log.name) as f:
-            content = f.read()
-    except OSError:
-        content = ""
-
-    passed = 0
-    failed = 0
-    for label, substr in REQUIRED_MARKERS:
-        if substr in content:
-            print(f"[PASS] {label:30s} -> found {substr!r}")
-            passed += 1
-        else:
-            print(f"[FAIL] {label:30s} -> missing {substr!r}")
+        # pthread_coverage exercises multiple workers and repeated lock
+        # cycles — give it a generous deadline.
+        cov = _send_and_wait("run('/examples/pthread_coverage.py')\n",
+                              timeout=max(RECV_TIMEOUT, 180.0))
+        if not cov:
+            print("[FAIL] pthread_coverage.py never returned to shell prompt")
             failed += 1
+        else:
+            cov_markers = ("lifecycle ok", "identity ok", "tss ok",
+                           "lock ok", "capacity ok", "attr ok",
+                           "pthread coverage done passed=6/6")
+            for marker in cov_markers:
+                if marker in cov:
+                    print(f"[PASS] pthread_coverage: {marker!r}")
+                    passed += 1
+                else:
+                    print(f"[FAIL] pthread_coverage: missing {marker!r}")
+                    failed += 1
 
-    print(f"\n[smoke-arm64] {passed} passed, {failed} failed")
-    if failed:
-        _print_serial(serial_log.name)
-        return 1
-    return 0
+        print(f"\n[smoke-arm64] {passed} passed, {failed} failed")
+        if failed:
+            print("--- captured output (tail) ---")
+            print("".join(stream)[-4000:])
+        return 0 if failed == 0 else 1
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 if __name__ == "__main__":
