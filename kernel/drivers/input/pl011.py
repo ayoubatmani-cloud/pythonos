@@ -19,10 +19,20 @@ _FR   = _PL011_BASE + 0x018   # flag register
 _RXFE = 1 << 4                 # RX FIFO empty flag
 
 
-async def read_char() -> str:
-    """Wait for the next character from the PL011 UART and return it."""
+async def read_byte() -> int:
+    """Wait for the next raw byte from PL011 (0–255, no translation)."""
     while True:
         if not (_hal.mmio_read32(_FR) & _RXFE):
-            ch = chr(_hal.mmio_read32(_DR) & 0xFF)
-            return '\n' if ch == '\r' else ch
+            return _hal.mmio_read32(_DR) & 0xFF
         await asyncio.sleep(0)
+
+
+async def read_char() -> str:
+    """Wait for the next character from the PL011 UART.
+
+    Translates CR→LF for consumers using the legacy line-buffered shell
+    loop. Use read_byte() for the raw stream linenoise wants.
+    """
+    b = await read_byte()
+    ch = chr(b & 0x7F)
+    return '\n' if ch == '\r' else ch

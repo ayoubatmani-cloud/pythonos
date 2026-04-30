@@ -129,6 +129,16 @@ async def _kernel_main(
         else:
             log._serial_raw(text)
 
+    def _write_raw(buf) -> None:
+        # Raw byte/string sink for linenoise — bypasses any \n→\r\n
+        # translation; on serial we go straight to the same path as
+        # _write but without the console double-write.
+        if isinstance(buf, (bytes, bytearray)):
+            text = buf.decode('utf-8', errors='replace')
+        else:
+            text = buf
+        log._serial_raw(text)
+
     # ── Keyboard / serial input ────────────────────────────────────────────
     if _ARCH == 'x86_64':
         from kernel.drivers.input import com1
@@ -187,7 +197,9 @@ async def _kernel_main(
     # ── Shell ──────────────────────────────────────────────────────────────
     from kernel.shell import Shell
 
-    shell = Shell(read_char=keyboard.read_char, write=_write)
+    shell = Shell(read_char=keyboard.read_char, write=_write,
+                  read_byte=getattr(keyboard, 'read_byte', None),
+                  write_raw=_write_raw)
     scheduler.spawn(shell.run(), name="kshell")
     log.info("kernel: shell spawned — system ready")
 

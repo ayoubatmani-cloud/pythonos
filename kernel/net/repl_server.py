@@ -36,23 +36,40 @@ async def start(port: int = _PORT) -> None:
 async def _session(conn) -> None:
     rx_buf = bytearray()
 
-    async def read_char() -> str:
+    async def _refill() -> None:
         while not rx_buf:
             data = await conn.recv(64)
             if not data:
                 raise EOFError("connection closed")
-            # Append raw bytes; strip high bit for 7-bit ASCII safety
             rx_buf.extend(data)
-        ch = chr(rx_buf.pop(0) & 0x7F)
+
+    async def read_byte() -> int:
+        """Raw byte stream; linenoise needs CR (\\r) untranslated."""
+        await _refill()
+        return rx_buf.pop(0)
+
+    async def read_char() -> str:
+        """Legacy char stream with CR→LF translation, used as a fallback
+        when linenoise editing is not active."""
+        b = await read_byte()
+        ch = chr(b & 0x7F)
         return '\n' if ch == '\r' else ch
 
     def write(text: str) -> None:
-        # translate \n → \r\n for terminal compatibility; fire-and-forget
+        """\\n → \\r\\n translation for terminal compatibility."""
         out = text.replace('\n', '\r\n').encode('utf-8', errors='replace')
         asyncio.ensure_future(conn.send(out))
 
+    def write_raw(buf) -> None:
+        """Raw byte/string sink — used by linenoise, which emits its
+        own VT100 escapes including \\r and \\n."""
+        if isinstance(buf, str):
+            buf = buf.encode('utf-8', errors='replace')
+        asyncio.ensure_future(conn.send(bytes(buf)))
+
     try:
-        shell = Shell(read_char=read_char, write=write)
+        shell = Shell(read_char=read_char, write=write,
+                      read_byte=read_byte, write_raw=write_raw)
         await shell.run()
     except EOFError:
         pass

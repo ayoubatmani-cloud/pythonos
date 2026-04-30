@@ -586,45 +586,81 @@ static PyObject *py_linenoise_set_multi_line(PyObject *self, PyObject *args) {
 
 // ── Non-blocking linenoise edit (cooperatively driven from asyncio) ────────
 //
-// Closes pythonos-e6f. The blocking linenoise() above is fine for a
-// real serial tty but is unsuitable for the TCP REPL, which delivers
-// bytes through the kernel's asyncio event loop. The non-blocking
-// surface (linenoiseEditStart / Feed / Stop) lets a Python coroutine
-// own the input loop and feed one byte at a time.
+// Multi-session support: the kernel can have several Shell instances
+// running concurrently (kshell on serial + N TCP REPL sessions + an
+// example script driving its own line edit). Each gets its own
+// linenoiseState slot. The libc read(0)/write(1) hooks remain global
+// (linenoise calls them by fd, not by state pointer) but switch to
+// the *currently feeding* session for the duration of each
+// linenoiseEditFeed call. Sessions that aren't currently feeding
+// don't disturb each other's pending-byte buffer.
 
 extern void libc_set_stdin_byte_reader(int (*fn)(void));
 extern void libc_set_stdout_write_hook(int (*fn)(int, const char *, size_t));
 
-static struct linenoiseState ln_async_state;
-static char ln_async_buf[2048];
-static int ln_async_active = 0;
-static int ln_async_pending_byte = -1;
-static PyObject *ln_async_write_callback = NULL;
+#define LN_MAX_SESSIONS 8
+#define LN_BUF_SIZE 2048
+
+typedef struct {
+    int in_use;
+    struct linenoiseState state;
+    char buf[LN_BUF_SIZE];
+    int pending_byte;            /* -1 when no byte queued */
+    PyObject *write_callback;    /* owned reference */
+} ln_session_t;
+
+static ln_session_t ln_sessions[LN_MAX_SESSIONS];
+static int ln_active_session = -1;  /* index of session feeding right now */
+static int ln_global_hooks_installed = 0;
 
 static int ln_async_byte_reader(void) {
-    int b = ln_async_pending_byte;
-    ln_async_pending_byte = -1;
+    if (ln_active_session < 0) return -1;
+    int b = ln_sessions[ln_active_session].pending_byte;
+    ln_sessions[ln_active_session].pending_byte = -1;
     return b;
 }
 
 static int ln_async_write_hook(int fd, const char *buf, size_t n) {
     (void)fd;
-    if (!ln_async_write_callback || n == 0) {
-        return 0;
-    }
+    if (ln_active_session < 0 || n == 0) return 0;
+    PyObject *cb = ln_sessions[ln_active_session].write_callback;
+    if (!cb) return 0;
     PyObject *bytes = PyBytes_FromStringAndSize(buf, (Py_ssize_t)n);
-    if (!bytes) {
-        PyErr_Clear();
-        return 0;
-    }
-    PyObject *result = PyObject_CallOneArg(ln_async_write_callback, bytes);
+    if (!bytes) { PyErr_Clear(); return 0; }
+    PyObject *result = PyObject_CallOneArg(cb, bytes);
     Py_DECREF(bytes);
-    if (!result) {
-        PyErr_Clear();
-        return 0;
-    }
+    if (!result) { PyErr_Clear(); return 0; }
     Py_DECREF(result);
     return 1;
+}
+
+static int ln_count_active(void) {
+    int n = 0;
+    for (int i = 0; i < LN_MAX_SESSIONS; i++) {
+        if (ln_sessions[i].in_use) n++;
+    }
+    return n;
+}
+
+static void ln_install_global_hooks(void) {
+    if (ln_global_hooks_installed) return;
+    libc_set_stdin_byte_reader(ln_async_byte_reader);
+    libc_set_stdout_write_hook(ln_async_write_hook);
+    ln_global_hooks_installed = 1;
+}
+
+static void ln_uninstall_global_hooks(void) {
+    if (!ln_global_hooks_installed) return;
+    libc_set_stdin_byte_reader(NULL);
+    libc_set_stdout_write_hook(NULL);
+    ln_global_hooks_installed = 0;
+}
+
+static int ln_alloc_session(void) {
+    for (int i = 0; i < LN_MAX_SESSIONS; i++) {
+        if (!ln_sessions[i].in_use) return i;
+    }
+    return -1;
 }
 
 static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
@@ -632,58 +668,76 @@ static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
     PyObject *write_cb = NULL;
     if (!PyArg_ParseTuple(args, "|sO", &prompt, &write_cb)) return NULL;
 
-    if (ln_async_active) {
-        PyErr_SetString(PyExc_RuntimeError, "linenoise edit already active");
+    int slot = ln_alloc_session();
+    if (slot < 0) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "no free linenoise session slots");
         return NULL;
     }
+    ln_session_t *sess = &ln_sessions[slot];
+    sess->in_use = 1;
+    sess->pending_byte = -1;
+    sess->write_callback = NULL;
     if (write_cb && write_cb != Py_None) {
         if (!PyCallable_Check(write_cb)) {
+            sess->in_use = 0;
             PyErr_SetString(PyExc_TypeError,
                             "write callback must be callable or None");
             return NULL;
         }
         Py_INCREF(write_cb);
-        Py_XDECREF(ln_async_write_callback);
-        ln_async_write_callback = write_cb;
-        libc_set_stdout_write_hook(ln_async_write_hook);
+        sess->write_callback = write_cb;
     }
 
-    libc_set_stdin_byte_reader(ln_async_byte_reader);
-    ln_async_pending_byte = -1;
+    /* Install global hooks if first session, and route them to this
+     * one for the duration of linenoiseEditStart's prompt write. */
+    ln_install_global_hooks();
+    int prev_active = ln_active_session;
+    ln_active_session = slot;
 
-    if (linenoiseEditStart(&ln_async_state, 0, 1, ln_async_buf,
-                           sizeof(ln_async_buf), prompt) != 0) {
-        libc_set_stdin_byte_reader(NULL);
-        libc_set_stdout_write_hook(NULL);
-        Py_XDECREF(ln_async_write_callback);
-        ln_async_write_callback = NULL;
+    int rc = linenoiseEditStart(&sess->state, 0, 1, sess->buf,
+                                LN_BUF_SIZE, prompt);
+    /* Restore previous active session pointer; subsequent feeds will
+     * set it explicitly via py_linenoise_edit_feed_byte. */
+    ln_active_session = prev_active;
+
+    if (rc != 0) {
+        Py_XDECREF(sess->write_callback);
+        sess->write_callback = NULL;
+        sess->in_use = 0;
+        if (ln_count_active() == 0) {
+            ln_uninstall_global_hooks();
+        }
         PyErr_SetString(PyExc_RuntimeError, "linenoiseEditStart failed");
         return NULL;
     }
-    ln_async_active = 1;
-    Py_RETURN_NONE;
+    return PyLong_FromLong((long)slot);
 }
 
 static PyObject *py_linenoise_edit_feed_byte(PyObject *self, PyObject *args) {
-    int byte;
-    if (!PyArg_ParseTuple(args, "i", &byte)) return NULL;
-    if (!ln_async_active) {
-        PyErr_SetString(PyExc_RuntimeError, "linenoise edit not started");
+    int slot, byte;
+    if (!PyArg_ParseTuple(args, "ii", &slot, &byte)) return NULL;
+    if (slot < 0 || slot >= LN_MAX_SESSIONS || !ln_sessions[slot].in_use) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "linenoise session not started");
         return NULL;
     }
     if (byte < 0 || byte > 255) {
         PyErr_SetString(PyExc_ValueError, "byte out of range");
         return NULL;
     }
-    ln_async_pending_byte = byte;
+    ln_session_t *sess = &ln_sessions[slot];
+    sess->pending_byte = byte;
 
-    char *result = linenoiseEditFeed(&ln_async_state);
+    int prev_active = ln_active_session;
+    ln_active_session = slot;
+    char *result = linenoiseEditFeed(&sess->state);
+    ln_active_session = prev_active;
+
     if (result == linenoiseEditMore) {
-        Py_RETURN_NONE;  /* need more input */
+        Py_RETURN_NONE;
     }
     if (result == NULL) {
-        /* linenoise signals EOF / Ctrl-C by returning NULL. Distinguish
-         * from "need more" by raising EOFError so callers can branch. */
         PyErr_SetNone(PyExc_EOFError);
         return NULL;
     }
@@ -693,16 +747,26 @@ static PyObject *py_linenoise_edit_feed_byte(PyObject *self, PyObject *args) {
 }
 
 static PyObject *py_linenoise_edit_stop(PyObject *self, PyObject *args) {
-    (void)args;
-    if (ln_async_active) {
-        linenoiseEditStop(&ln_async_state);
-        ln_async_active = 0;
+    int slot;
+    if (!PyArg_ParseTuple(args, "i", &slot)) return NULL;
+    if (slot < 0 || slot >= LN_MAX_SESSIONS) {
+        PyErr_SetString(PyExc_ValueError, "invalid linenoise slot");
+        return NULL;
     }
-    libc_set_stdin_byte_reader(NULL);
-    libc_set_stdout_write_hook(NULL);
-    Py_XDECREF(ln_async_write_callback);
-    ln_async_write_callback = NULL;
-    ln_async_pending_byte = -1;
+    ln_session_t *sess = &ln_sessions[slot];
+    if (sess->in_use) {
+        int prev_active = ln_active_session;
+        ln_active_session = slot;
+        linenoiseEditStop(&sess->state);
+        ln_active_session = prev_active;
+        sess->in_use = 0;
+    }
+    Py_XDECREF(sess->write_callback);
+    sess->write_callback = NULL;
+    sess->pending_byte = -1;
+    if (ln_count_active() == 0) {
+        ln_uninstall_global_hooks();
+    }
     Py_RETURN_NONE;
 }
 
@@ -770,7 +834,7 @@ static PyMethodDef hal_methods[] = {
     {"linenoise_set_multi_line", py_linenoise_set_multi_line, METH_VARARGS, "Enable/disable linenoise multi-line edit mode"},
     {"linenoise_edit_start", py_linenoise_edit_start, METH_VARARGS, "Begin a non-blocking linenoise edit (prompt, write_callback)"},
     {"linenoise_edit_feed_byte", py_linenoise_edit_feed_byte, METH_VARARGS, "Feed one input byte; returns the completed line (Enter), '' (EOF), or None for more"},
-    {"linenoise_edit_stop", py_linenoise_edit_stop, METH_NOARGS, "End the current non-blocking linenoise edit"},
+    {"linenoise_edit_stop", py_linenoise_edit_stop, METH_VARARGS, "End the non-blocking linenoise edit (slot)"},
     {"smp_run_selftest", py_smp_run_selftest, METH_NOARGS, "Run a worker self-test on each online AP (returns (executed, total_cpus))"},
     {NULL, NULL, 0, NULL}
 };

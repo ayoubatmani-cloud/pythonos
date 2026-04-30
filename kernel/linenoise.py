@@ -33,7 +33,7 @@ async def linenoise_edit(prompt, read_char, write):
             text = ""
         write(text)
 
-    _hal.linenoise_edit_start(prompt, _write_bytes)
+    slot = _hal.linenoise_edit_start(prompt, _write_bytes)
     try:
         while True:
             ch = await read_char()
@@ -49,11 +49,18 @@ async def linenoise_edit(prompt, read_char, write):
                 b = ch
             else:
                 raise TypeError("read_char must return str/bytes/int")
+            # Treat LF as CR so callers feeding a stream that uses '\n'
+            # for Enter (telnet-style line discipline, asyncio TCP test
+            # clients, host smoke runners) drive linenoise correctly.
+            # Real terminals always send '\r' for Enter, which is
+            # already linenoise's KEY_ENTER.
+            if b == 0x0a:
+                b = 0x0d
             try:
-                line = _hal.linenoise_edit_feed_byte(b)
+                line = _hal.linenoise_edit_feed_byte(slot, b)
             except EOFError:
                 return None
             if line is not None:
                 return line
     finally:
-        _hal.linenoise_edit_stop()
+        _hal.linenoise_edit_stop(slot)

@@ -49,13 +49,29 @@ class Shell:
 
     def __init__(self,
                  read_char: Callable[[], Awaitable[str]],
-                 write: Callable[[str], None]) -> None:
-        self._read  = read_char
-        self._write = write
-        self._buf   = ""         # accumulated input line
-        self._block = ""         # accumulated multi-line block
-        self._cwd   = "/"        # current working directory
-        self._ns    = self._build_namespace()
+                 write: Callable[[str], None],
+                 read_byte=None,
+                 write_raw=None) -> None:
+        self._read       = read_char
+        self._write      = write
+        self._read_byte  = read_byte
+        self._write_raw  = write_raw
+        self._block      = ""         # accumulated multi-line block
+        self._cwd        = "/"        # current working directory
+        self._ns         = self._build_namespace()
+        # Linenoise editing is available iff both raw streams were
+        # supplied. The TCP REPL (kernel/net/repl_server.py) and the
+        # serial bring-up in kernel/__init__.py wire both; consumers
+        # that only have a char-at-a-time loop (early boot diagnostics,
+        # tests) fall back to the simple line buffer.
+        self._linenoise_ready = False
+        if read_byte is not None and write_raw is not None:
+            try:
+                import _hal
+                _hal.linenoise_history_set_max_len(64)
+                self._linenoise_ready = True
+            except Exception:
+                self._linenoise_ready = False
 
     def _build_namespace(self) -> dict:
         import kernel
@@ -88,42 +104,82 @@ class Shell:
         }
         return ns
 
+    async def _read_line(self, prompt: str):
+        """Prompt the user for one line of input.
+
+        With raw byte/write callables available, defers to linenoise for
+        full line editing (cursor movement, history recall, Ctrl-K/U/W,
+        etc.). Otherwise falls back to the simple char-buffered loop the
+        shell shipped with originally.
+        Returns the line as a str, or None if the user signalled EOF
+        (Ctrl-C / Ctrl-D / closed connection).
+        """
+        if self._linenoise_ready:
+            try:
+                from kernel.linenoise import linenoise_edit
+                line = await linenoise_edit(prompt, self._read_byte,
+                                             self._write_raw)
+                # linenoise emits its own \r\n on Enter; for fallback
+                # parity we still want a newline after the line is in
+                # if the user came in via fallback path.
+                return line
+            except Exception:
+                # Any runtime failure (e.g. _hal busy) drops back to
+                # the buffered loop so the shell never wedges.
+                pass
+        return await self._read_line_fallback(prompt)
+
+    async def _read_line_fallback(self, prompt: str):
+        self._write(prompt)
+        buf = ""
+        while True:
+            ch = await self._read()
+            if ch == '\n':
+                self._write('\n')
+                return buf
+            if ch == '\b' or ord(ch) == 127:
+                if buf:
+                    buf = buf[:-1]
+                    self._write('\b \b')
+                continue
+            buf += ch
+            self._write(ch)
+
+    def _history_add(self, line: str) -> None:
+        if not self._linenoise_ready:
+            return
+        if not line.strip():
+            return
+        try:
+            import _hal
+            _hal.linenoise_history_add(line)
+        except Exception:
+            pass
+
     async def run(self) -> None:
         self._write("\nPythonOS kernel shell\n")
         self._write("Python " + __import__('sys').version + "\n")
         self._write("Type 'help' for help.\n")
         self._write("Commands: ls ps pwd cd cat cp mv ftp ed sysinfo netstat\n")
         self._write("Helpers: sh()  sh('cmd args')  run('/path')  clear()\n\n")
-        self._write(self.PROMPT)
 
         while True:
-            ch = await self._read()
-
-            if ch == '\n':
-                self._write('\n')
-                line = self._buf
-                self._buf = ""
-                await self._process_line(line)
-            elif ch == '\b' or ord(ch) == 127:
-                if self._buf:
-                    self._buf = self._buf[:-1]
-                    self._write('\b \b')
-            else:
-                self._buf += ch
-                self._write(ch)   # echo
+            prompt = self.CONT_PROMPT if self._block else self.PROMPT
+            line = await self._read_line(prompt)
+            if line is None:
+                # EOF / closed: exit the REPL loop cleanly.
+                return
+            self._history_add(line)
+            await self._process_line(line)
 
     async def _process_line(self, line: str) -> None:
         if not line.strip() and not self._block:
-            self._write(self.PROMPT)
             return
 
         self._block += line + "\n"
 
         # Check if we need more input (open block)
-        needs_more = self._is_incomplete(self._block)
-
-        if needs_more:
-            self._write(self.CONT_PROMPT)
+        if self._is_incomplete(self._block):
             return
 
         src = self._block
@@ -131,7 +187,6 @@ class Shell:
 
         # Shell command dispatch: bare word(s) not in Python namespace → /bin/<name>.py
         if await self._try_shell_dispatch(src):
-            self._write(self.PROMPT)
             return
 
         src = self._fixup_source(src)
@@ -151,8 +206,6 @@ class Shell:
             self._write("Use kernel halt to stop the system.\n")
         except Exception:
             self._write(traceback.format_exc())
-
-        self._write(self.PROMPT)
 
     # ── Shell command dispatch ────────────────────────────────────────────────
 
@@ -293,29 +346,26 @@ class Shell:
         await self._run_sh_parts(parts)
 
     async def _sh_repl(self) -> None:
-        """Interactive sub-shell: $ prompt, command dispatch, 'exit' to return."""
+        """Interactive sub-shell: $ prompt, command dispatch, 'exit' to return.
+
+        Uses the same line-edit path as the top-level Python REPL so
+        users get arrow-key cursor movement, backspace, and Ctrl-A/E,
+        plus a separate history ring (we keep using the global
+        linenoise history, so commands typed in the sub-shell are
+        recallable in the parent REPL).
+        """
         SH = "$ "
-        self._write(SH)
-        buf = ""
         while True:
-            ch = await self._read()
-            if ch == '\n':
-                self._write('\n')
-                line = buf.strip()
-                buf = ""
-                if line == 'exit':
-                    return
-                if line:
-                    parts = line.split()
-                    await self._run_sh_parts(parts)
-                self._write(SH)
-            elif ch == '\b' or ord(ch) == 127:
-                if buf:
-                    buf = buf[:-1]
-                    self._write('\b \b')
-            else:
-                buf += ch
-                self._write(ch)
+            line = await self._read_line(SH)
+            if line is None:
+                return
+            line = line.strip()
+            if line == 'exit':
+                return
+            if line:
+                self._history_add(line)
+                parts = line.split()
+                await self._run_sh_parts(parts)
 
     async def _run_sh_parts(self, parts: list[str]) -> None:
         name = parts[0]
