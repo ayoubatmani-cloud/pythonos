@@ -22,7 +22,7 @@ ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 HOST_PORT = int(os.environ.get("PYTHONOS_HOST_PORT", "5555"))
 FILE_HOST_PORT = int(os.environ.get("PYTHONOS_FILE_PORT", "17000"))
 SMP_CPUS = os.environ.get("PYTHONOS_SMP_CPUS", "2")
-FREE_THREADING = os.environ.get("PYTHONOS_FREE_THREADING", "0")
+FREE_THREADING = os.environ.get("PYTHONOS_FREE_THREADING", "1")
 BOOT_TIMEOUT = 90      # seconds to wait for REPL to become reachable
 RECV_TIMEOUT = 15.0    # per-response timeout
 

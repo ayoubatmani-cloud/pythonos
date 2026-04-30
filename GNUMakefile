@@ -22,7 +22,7 @@ FILE_HOST_PORT ?= $(if $(PYTHONOS_FILE_PORT),$(PYTHONOS_FILE_PORT),17000)
 ARM64_REPL_HOST_PORT ?= 5556
 ARM64_FILE_HOST_PORT ?= 17002
 SMP_CPUS ?= $(if $(PYTHONOS_SMP_CPUS),$(PYTHONOS_SMP_CPUS),2)
-PYTHONOS_FREE_THREADING ?= 0
+PYTHONOS_FREE_THREADING ?= 1
 
 QEMU_FLAGS := -machine q35 -cpu qemu64 -m 2G -smp $(SMP_CPUS) \
               -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
