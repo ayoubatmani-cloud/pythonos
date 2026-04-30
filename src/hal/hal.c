@@ -584,6 +584,160 @@ static PyObject *py_linenoise_set_multi_line(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// ── Non-blocking linenoise edit (cooperatively driven from asyncio) ────────
+//
+// Closes pythonos-e6f. The blocking linenoise() above is fine for a
+// real serial tty but is unsuitable for the TCP REPL, which delivers
+// bytes through the kernel's asyncio event loop. The non-blocking
+// surface (linenoiseEditStart / Feed / Stop) lets a Python coroutine
+// own the input loop and feed one byte at a time.
+
+extern void libc_set_stdin_byte_reader(int (*fn)(void));
+extern void libc_set_stdout_write_hook(int (*fn)(int, const char *, size_t));
+
+static struct linenoiseState ln_async_state;
+static char ln_async_buf[2048];
+static int ln_async_active = 0;
+static int ln_async_pending_byte = -1;
+static PyObject *ln_async_write_callback = NULL;
+
+static int ln_async_byte_reader(void) {
+    int b = ln_async_pending_byte;
+    ln_async_pending_byte = -1;
+    return b;
+}
+
+static int ln_async_write_hook(int fd, const char *buf, size_t n) {
+    (void)fd;
+    if (!ln_async_write_callback || n == 0) {
+        return 0;
+    }
+    PyObject *bytes = PyBytes_FromStringAndSize(buf, (Py_ssize_t)n);
+    if (!bytes) {
+        PyErr_Clear();
+        return 0;
+    }
+    PyObject *result = PyObject_CallOneArg(ln_async_write_callback, bytes);
+    Py_DECREF(bytes);
+    if (!result) {
+        PyErr_Clear();
+        return 0;
+    }
+    Py_DECREF(result);
+    return 1;
+}
+
+static PyObject *py_linenoise_edit_start(PyObject *self, PyObject *args) {
+    const char *prompt = "";
+    PyObject *write_cb = NULL;
+    if (!PyArg_ParseTuple(args, "|sO", &prompt, &write_cb)) return NULL;
+
+    if (ln_async_active) {
+        PyErr_SetString(PyExc_RuntimeError, "linenoise edit already active");
+        return NULL;
+    }
+    if (write_cb && write_cb != Py_None) {
+        if (!PyCallable_Check(write_cb)) {
+            PyErr_SetString(PyExc_TypeError,
+                            "write callback must be callable or None");
+            return NULL;
+        }
+        Py_INCREF(write_cb);
+        Py_XDECREF(ln_async_write_callback);
+        ln_async_write_callback = write_cb;
+        libc_set_stdout_write_hook(ln_async_write_hook);
+    }
+
+    libc_set_stdin_byte_reader(ln_async_byte_reader);
+    ln_async_pending_byte = -1;
+
+    if (linenoiseEditStart(&ln_async_state, 0, 1, ln_async_buf,
+                           sizeof(ln_async_buf), prompt) != 0) {
+        libc_set_stdin_byte_reader(NULL);
+        libc_set_stdout_write_hook(NULL);
+        Py_XDECREF(ln_async_write_callback);
+        ln_async_write_callback = NULL;
+        PyErr_SetString(PyExc_RuntimeError, "linenoiseEditStart failed");
+        return NULL;
+    }
+    ln_async_active = 1;
+    Py_RETURN_NONE;
+}
+
+static PyObject *py_linenoise_edit_feed_byte(PyObject *self, PyObject *args) {
+    int byte;
+    if (!PyArg_ParseTuple(args, "i", &byte)) return NULL;
+    if (!ln_async_active) {
+        PyErr_SetString(PyExc_RuntimeError, "linenoise edit not started");
+        return NULL;
+    }
+    if (byte < 0 || byte > 255) {
+        PyErr_SetString(PyExc_ValueError, "byte out of range");
+        return NULL;
+    }
+    ln_async_pending_byte = byte;
+
+    char *result = linenoiseEditFeed(&ln_async_state);
+    if (result == linenoiseEditMore) {
+        Py_RETURN_NONE;  /* need more input */
+    }
+    if (result == NULL) {
+        /* linenoise signals EOF / Ctrl-C by returning NULL. Distinguish
+         * from "need more" by raising EOFError so callers can branch. */
+        PyErr_SetNone(PyExc_EOFError);
+        return NULL;
+    }
+    PyObject *out = PyUnicode_FromString(result);
+    linenoiseFree(result);
+    return out;
+}
+
+static PyObject *py_linenoise_edit_stop(PyObject *self, PyObject *args) {
+    (void)args;
+    if (ln_async_active) {
+        linenoiseEditStop(&ln_async_state);
+        ln_async_active = 0;
+    }
+    libc_set_stdin_byte_reader(NULL);
+    libc_set_stdout_write_hook(NULL);
+    Py_XDECREF(ln_async_write_callback);
+    ln_async_write_callback = NULL;
+    ln_async_pending_byte = -1;
+    Py_RETURN_NONE;
+}
+
+// ── pythonos-3yx: lightweight C-callable dispatch via _hal.smp_run_selftest
+//
+// Submits a no-op runner to each online AP and joins. Useful for
+// diagnostics — Python can verify AP responsiveness at runtime without
+// going through _thread.start_new_thread.
+
+static uint64_t hal_smp_runner(void *cpu, void *arg) {
+    (void)cpu; (void)arg;
+    return 0xC0FFEEUL;
+}
+
+static PyObject *py_smp_run_selftest(PyObject *self, PyObject *args) {
+    (void)args;
+    uint32_t executed = 0;
+    uint32_t online = smp_online_count();
+    if (online > 1) {
+        for (uint32_t i = 1; i < online; i++) {
+            uint64_t handle = 0;
+            if (!smp_submit_worker(hal_smp_runner, NULL, &handle)) {
+                continue;
+            }
+            uint64_t result = 0;
+            if (smp_join_worker(handle, &result) && result == 0xC0FFEEUL) {
+                executed++;
+            }
+        }
+    }
+    return Py_BuildValue("(II)",
+                         (unsigned int)executed,
+                         (unsigned int)smp_cpu_count());
+}
+
 // ── Module definition ─────────────────────────────────────────────────────────
 
 static PyMethodDef hal_methods[] = {
@@ -614,6 +768,10 @@ static PyMethodDef hal_methods[] = {
     {"linenoise_history_set_max_len", py_linenoise_history_set_max_len, METH_VARARGS, "Set linenoise history capacity"},
     {"linenoise_clear_screen", py_linenoise_clear_screen, METH_NOARGS, "Clear the terminal screen via VT100 escapes"},
     {"linenoise_set_multi_line", py_linenoise_set_multi_line, METH_VARARGS, "Enable/disable linenoise multi-line edit mode"},
+    {"linenoise_edit_start", py_linenoise_edit_start, METH_VARARGS, "Begin a non-blocking linenoise edit (prompt, write_callback)"},
+    {"linenoise_edit_feed_byte", py_linenoise_edit_feed_byte, METH_VARARGS, "Feed one input byte; returns the completed line (Enter), '' (EOF), or None for more"},
+    {"linenoise_edit_stop", py_linenoise_edit_stop, METH_NOARGS, "End the current non-blocking linenoise edit"},
+    {"smp_run_selftest", py_smp_run_selftest, METH_NOARGS, "Run a worker self-test on each online AP (returns (executed, total_cpus))"},
     {NULL, NULL, 0, NULL}
 };
 

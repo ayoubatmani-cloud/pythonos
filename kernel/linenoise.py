@@ -1,0 +1,59 @@
+"""Async wrapper around _hal's non-blocking linenoise editing.
+
+linenoise's blocking C API is not friendly to PythonOS's asyncio-based
+shell I/O — it expects a synchronous read(0) loop. The non-blocking
+surface (linenoiseEditStart/Feed/Stop, exposed via _hal as
+linenoise_edit_start / linenoise_edit_feed_byte / linenoise_edit_stop)
+hands control back to us after each byte, which is exactly what an
+async read_char loop wants.
+
+Use linenoise_edit() from a coroutine that has read_char and write
+callables (the same pair the shell already wires through). Returns
+the completed line as a string, or None if the user cancelled
+(Ctrl-C / EOF).
+"""
+
+import _hal
+
+
+async def linenoise_edit(prompt, read_char, write):
+    """Drive a non-blocking linenoise edit from a coroutine.
+
+    `prompt` is the prompt to display.
+    `read_char` is an awaitable returning one character (or one byte).
+    `write` is a callable that accepts a str and emits it to the
+    transport (terminal, TCP socket, ...). The wrapper installs a
+    bytes-oriented bridge so linenoise's VT100 escapes flow through.
+    """
+    def _write_bytes(buf):
+        # _hal hands us bytes; the shell's `write` callback accepts str.
+        try:
+            text = buf.decode("utf-8", errors="replace")
+        except Exception:
+            text = ""
+        write(text)
+
+    _hal.linenoise_edit_start(prompt, _write_bytes)
+    try:
+        while True:
+            ch = await read_char()
+            if isinstance(ch, str):
+                if not ch:
+                    raise EOFError
+                b = ord(ch[0])
+            elif isinstance(ch, (bytes, bytearray)):
+                if not ch:
+                    raise EOFError
+                b = ch[0]
+            elif isinstance(ch, int):
+                b = ch
+            else:
+                raise TypeError("read_char must return str/bytes/int")
+            try:
+                line = _hal.linenoise_edit_feed_byte(b)
+            except EOFError:
+                return None
+            if line is not None:
+                return line
+    finally:
+        _hal.linenoise_edit_stop()

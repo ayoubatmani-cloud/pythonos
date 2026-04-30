@@ -277,8 +277,13 @@ run-arm64: $(ARM64_ELF) $(ARM64_DISK)
 stop-arm64:
 	@pkill -f "qemu-system-aarch64.*$(ARM64_ELF)" || echo "No arm64 QEMU running."
 
+# arm64 libpython defaults to GIL-enabled because Py_GIL_DISABLED hangs
+# Py_InitializeFromConfig on aarch64-elf in our build environment (tracked
+# by pythonos-hyg). Override with PYTHONOS_ARM64_FREE_THREADING=1 if you
+# want to chase the upstream bug.
+PYTHONOS_ARM64_FREE_THREADING ?= 0
 $(LIBPYTHON_ARM64): .docker-image
-	docker run --rm --platform linux/amd64 -e PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) -v $(PWD):/work -w /work $(DOCKER_IMG) \
+	docker run --rm --platform linux/amd64 -e PYTHONOS_FREE_THREADING=$(PYTHONOS_ARM64_FREE_THREADING) -v $(PWD):/work -w /work $(DOCKER_IMG) \
 	  bash -c "./tools/setup_cpython.sh --arch=arm64 --build"
 
 $(ARM64_ELF): $(LIBPYTHON_ARM64) \

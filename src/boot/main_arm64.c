@@ -122,6 +122,7 @@ void kernel_main_arm64(uint64_t dtb_ptr) {
     /* Bring up secondary cores via PSCI CPU_ON. With QEMU virt -smp 1
      * (the default in our Makefile) this no-ops; with -smp 2+ it brings
      * each AP into ap_runtime_loop() ready to take pthread workers. */
+    pl011_puts("[PythonOS/arm64] boot: about to call smp_init\n");
     smp_init(NULL);
     pl011_puts("[PythonOS/arm64] boot: SMP init complete, online=");
     {

@@ -78,6 +78,12 @@ if SMP_CPUS.isdigit():
             "__import__('_hal').pthread_selftest()\n",
             "(0, 123456789, 4660)",
         ))
+        # smp_run_selftest dispatches a no-op runner to each AP and joins.
+        # With SMP_CPUS=2 (1 AP), executed=1 and total=2.
+        TEST_CASES.append((
+            "__import__('_hal').smp_run_selftest()\n",
+            f"({int(SMP_CPUS)-1}, {SMP_CPUS})",
+        ))
 
 
 def wait_for_port(port: int, timeout: float, proc: subprocess.Popen) -> bool:
@@ -328,6 +334,7 @@ def run_example_tests(sock: socket.socket) -> tuple[int, int]:
         run_recv_file_example,
         run_send_file_example,
         run_tone_example,
+        run_linenoise_demo_example,
     ])
 
     for runner in runners:
@@ -414,6 +421,22 @@ def run_thread_demo_example(sock: socket.socket) -> bool:
             "values: " + repr(list(range(max(1, min(3, int(SMP_CPUS) - 1))))),
             "timeout expired: True",
             "delayed acquire: True",
+        ),
+    )
+
+
+def run_linenoise_demo_example(sock: socket.socket) -> bool:
+    # Closes pythonos-e6f: drives _hal's non-blocking linenoise edit
+    # surface from kernel/linenoise.py with a synthetic byte stream.
+    return run_simple_example(
+        sock,
+        "run('/examples/linenoise_demo.py')\n",
+        (
+            "linenoise demo start",
+            "linenoise edit ok line='hell world'",
+            "linenoise eof ok",
+            "linenoise history ok",
+            "linenoise demo done",
         ),
     )
 

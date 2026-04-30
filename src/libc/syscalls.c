@@ -132,6 +132,27 @@ void libc_set_stdin_byte_reader(int (*fn)(void)) {
     _stdin_read_byte = fn;
 }
 
+int libc_stdin_byte_reader_active(void) {
+    return _stdin_read_byte != 0;
+}
+
+/* write(1, ...) and write(2, ...) route through a kernel-installed
+ * write hook when set; this lets the kernel REPL (or any other byte
+ * sink) intercept stdout/stderr writes from linenoise so the editor
+ * can drive a TCP-attached client instead of the serial console. The
+ * hook receives the destination fd plus a (buf, len) pair and returns
+ * 1 if it consumed the write, 0 to fall back to the serial path. */
+static int (*_stdout_write_hook)(int fd, const char *buf, size_t n) = 0;
+
+void libc_set_stdout_write_hook(int (*fn)(int, const char *, size_t)) {
+    _stdout_write_hook = fn;
+}
+
+int libc_stdout_hook_active(void) { return _stdout_write_hook != 0; }
+int libc_invoke_stdout_hook(int fd, const char *buf, size_t n) {
+    return _stdout_write_hook ? _stdout_write_hook(fd, buf, n) : 0;
+}
+
 long read(int fd, void *buf, size_t n) {
     if (fd != 0 || !buf || n == 0) {
         if (fd == 0 && !_stdin_read_byte) {
@@ -165,7 +186,14 @@ long read(int fd, void *buf, size_t n) {
 }
 
 long write(int fd, const void *buf, size_t n) {
-    // fd 1 = stdout, fd 2 = stderr — both go to serial
+    // fd 1 = stdout, fd 2 = stderr — both go to serial unless a kernel
+    // hook has claimed them (e.g. the TCP REPL routing linenoise output
+    // back to the connected client).
+    if ((fd == 1 || fd == 2) && libc_stdout_hook_active()) {
+        if (libc_invoke_stdout_hook(fd, buf, n)) {
+            return (long)n;
+        }
+    }
     if (fd == 1 || fd == 2) {
         const char *p = buf;
         for (size_t i = 0; i < n; i++) {
@@ -508,7 +536,17 @@ int nanosleep(const struct timespec *req, struct timespec *rem) {
 
 int pause(void) { errno = EINTR; return -1; }
 
-int isatty(int fd) { return fd == 1 || fd == 2; }
+/* isatty: stdout/stderr are always treated as terminals (they go to
+ * serial / TCP REPL via stdio.c). stdin is a terminal only when a
+ * kernel callback is installed (see libc_set_stdin_byte_reader); this
+ * is the toggle that makes linenoise's enableRawMode succeed when an
+ * async edit is in progress, while preserving the no-tty fallback
+ * (returns None / "" immediately) when no callback is wired. */
+int isatty(int fd) {
+    if (fd == 1 || fd == 2) return 1;
+    if (fd == 0) return libc_stdin_byte_reader_active();
+    return 0;
+}
 
 int getrusage(int who, struct rusage *usage) {
     (void)who;
