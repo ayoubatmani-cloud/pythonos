@@ -16,8 +16,8 @@
 #include <pthread.h>
 #ifndef ARCH_ARM64
 #include "../boot/io.h"
-#include "../boot/smp.h"
 #endif
+#include "../boot/smp.h"
 
 // Python C API callbacks have fixed signatures; many do not use self/args.
 #if defined(__GNUC__)
@@ -481,12 +481,6 @@ static PyObject *py_pthread_attr_selftest(PyObject *self, PyObject *args) {
         static volatile uint64_t attr_marker;
         attr_marker = 0;
         pthread_t tid;
-#ifdef ARCH_ARM64
-        // arm64 returns ENOSYS from pthread_create; skip create/join cases.
-        (void)tid;
-        (void)attr_marker;
-        cases++;
-#else
         if (pthread_create(&tid, &attrs, pthread_selftest_worker,
                            (void *)&attr_marker) != 0) {
             fail = "create with attr"; break;
@@ -501,7 +495,6 @@ static PyObject *py_pthread_attr_selftest(PyObject *self, PyObject *args) {
             fail = "attr worker marker"; break;
         }
         cases++;
-#endif
         if (pthread_attr_destroy(&attrs) != 0) { fail = "attr_destroy/2"; break; }
         cases++;
 
@@ -586,17 +579,13 @@ PyMODINIT_FUNC PyInit__hal(void) {
 #endif
 #ifdef ARCH_ARM64
     PyModule_AddStringConstant(m, "ARCH", "arm64");
-    PyModule_AddIntConstant(m, "SMP_CPUS", 1);
-    PyModule_AddIntConstant(m, "SMP_ONLINE", 1);
-    PyModule_AddIntConstant(m, "SMP_WORKERS", 1);
-    PyModule_AddIntConstant(m, "BSP_APIC_ID", 0);
 #else
     PyModule_AddStringConstant(m, "ARCH", "x86_64");
+#endif
     PyModule_AddIntConstant(m, "SMP_CPUS", (long)smp_cpu_count());
     PyModule_AddIntConstant(m, "SMP_ONLINE", (long)smp_online_count());
     PyModule_AddIntConstant(m, "SMP_WORKERS", (long)smp_worker_selftest_count());
     PyModule_AddIntConstant(m, "BSP_APIC_ID", (long)smp_bsp_apic_id());
-#endif
 #ifdef Py_GIL_DISABLED
     PyModule_AddIntConstant(m, "PY_GIL_DISABLED", 1);
 #else

@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include "io_arm64.h"
 #include "fb.h"
+#include "smp.h"
 
 /* ── Memory map (hardcoded for QEMU virt + -m 512M) ─────────────────────── */
 #define RAM_BASE 0x40000000UL
@@ -29,13 +30,32 @@ static mmap_entry_t boot_mmap[1] = {{ RAM_BASE, RAM_SIZE }};
  *   [3]  0xC0000000–0xFFFFFFFF  RAM
  *   [256] 0x4000000000–0x403FFFFFFF  device  (PCIe ECAM config space)
  */
-static uint64_t l1_table[512] __attribute__((aligned(4096)));
+/* Non-static so APs (src/boot/smp_arm64.c) can reuse the same table. */
+uint64_t l1_table[512] __attribute__((aligned(4096)));
 
-static void setup_paging_arm64(void) {
-    /* MAIR_EL1: index 0 = device nGnRnE (0x00), index 1 = normal WB (0xFF) */
+/* Apply MAIR/TCR/TTBR0 + SCTLR enable. Used by APs that share the L1
+ * table populated by the BSP. */
+void setup_paging_arm64_ap(void) {
     uint64_t mair = 0x00ULL | (0xFFULL << 8);
     __asm__ volatile("msr mair_el1, %0" :: "r"(mair));
 
+    uint64_t tcr = (25ULL)
+                 | (1ULL << 8)
+                 | (1ULL << 10)
+                 | (3ULL << 12)
+                 | (2ULL << 30);
+    __asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
+    __asm__ volatile("msr ttbr0_el1, %0" :: "r"((uint64_t)(uintptr_t)l1_table));
+    __asm__ volatile("dsb ish");
+    __asm__ volatile("isb");
+
+    uint64_t sctlr;
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+    sctlr |= (1ULL << 0) | (1ULL << 2) | (1ULL << 12);
+    __asm__ volatile("msr sctlr_el1, %0\nisb" :: "r"(sctlr));
+}
+
+static void setup_paging_arm64(void) {
     /* 1-GiB block descriptors: AF=1, SH=ISH (11), AttrIdx as noted */
 #define BLK_DEVICE  ((0ULL<<2)|(1ULL<<10)|(0b01ULL))           /* AttrIdx=0 */
 #define BLK_NORMAL  ((1ULL<<2)|(1ULL<<10)|(3ULL<<8)|(0b01ULL)) /* AttrIdx=1 */
@@ -46,27 +66,7 @@ static void setup_paging_arm64(void) {
     /* PCIe ECAM: 0x4010000000 sits in the 256th GB block */
     l1_table[256] = 0x4000000000ULL | BLK_DEVICE;
 
-    /* TCR_EL1: T0SZ=25 → 39-bit VA; 4 KB granule (TG0=00); WB cacheable */
-    uint64_t tcr = (25ULL)          /* T0SZ */
-                 | (1ULL << 8)      /* IRGN0 = WB WA */
-                 | (1ULL << 10)     /* ORGN0 = WB WA */
-                 | (3ULL << 12)     /* SH0   = ISH */
-                 | (2ULL << 30);    /* TG1   = 4KB (unused TTBR1) */
-    __asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
-
-    /* TTBR0_EL1 points directly to the L1 table */
-    __asm__ volatile("msr ttbr0_el1, %0" :: "r"((uint64_t)(uintptr_t)l1_table));
-
-    /* Ensure page table writes are visible before enabling MMU */
-    __asm__ volatile("dsb ish");
-    __asm__ volatile("isb");
-
-    uint64_t sctlr;
-    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-    sctlr |= (1ULL << 0)  /* M: enable MMU */
-           | (1ULL << 2)  /* C: enable D-cache */
-           | (1ULL << 12);/* I: enable I-cache */
-    __asm__ volatile("msr sctlr_el1, %0\nisb" :: "r"(sctlr));
+    setup_paging_arm64_ap();
 }
 
 /* ── TLS: set TPIDR_EL0 to a small zeroed region ─────────────────────────── */
@@ -118,6 +118,12 @@ void kernel_main_arm64(uint64_t dtb_ptr) {
 
     /* Unmask IRQs (clear I bit in DAIF) */
     __asm__ volatile("msr daifclr, #2");
+
+    /* Bring up secondary cores via PSCI CPU_ON. With QEMU virt -smp 1
+     * (the default in our Makefile) this no-ops; with -smp 2+ it brings
+     * each AP into ap_runtime_loop() ready to take pthread workers. */
+    smp_init(NULL);
+    pl011_puts("[PythonOS/arm64] boot: SMP init complete\n");
 
     pl011_puts("[PythonOS/arm64] boot: starting Python kernel\n");
     python_kernel_start(boot_mmap, 1, &boot_fb);

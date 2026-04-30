@@ -10,9 +10,7 @@
 #include "include/libc.h"
 #include "include/spinlock.h"
 #include <stdint.h>
-#ifndef ARCH_ARM64
 #include "../boot/smp.h"
-#endif
 
 #define MAX_KEYS 64
 #define MAX_THREAD_SLOTS 16
@@ -47,7 +45,14 @@ static spinlock_t pthread_records_lock = SPINLOCK_INITIALIZER;
 
 static pthread_t native_thread_id(void) {
 #ifdef ARCH_ARM64
-    return 1;
+    /* MPIDR_EL1 holds the affinity register identifying the running core.
+     * Aff0 (bits 0..7) is the core index within a cluster; we add 1 so
+     * the value is nonzero (matches the x86 cpuid arm). With single-core
+     * arm64 boot today this returns 1; once secondary cores are brought
+     * up (beads pythonos-bjr.1), each AP returns its own distinct id. */
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(mpidr));
+    return (pthread_t)((mpidr & 0xffU) + 1);
 #else
     uint32_t eax, ebx, ecx, edx;
     __asm__ volatile("cpuid"
@@ -186,7 +191,6 @@ int pthread_equal(pthread_t a, pthread_t b) {
     return a == b;
 }
 
-#ifndef ARCH_ARM64
 static uint64_t pthread_worker_entry(void *cpu, void *arg) {
     (void)cpu;
     pthread_record_t *record = (pthread_record_t *)arg;
@@ -206,17 +210,12 @@ static uint64_t pthread_worker_entry(void *cpu, void *arg) {
     spin_unlock(&pthread_records_lock);
     return (uint64_t)(uintptr_t)ret;
 }
-#endif
 
 int pthread_create(pthread_t *tid, const pthread_attr_t *attr,
                    void *(*fn)(void *), void *arg) {
-    (void)attr;
     if (!tid || !fn) {
         return EINVAL;
     }
-#ifdef ARCH_ARM64
-    return ENOSYS;
-#else
     spin_lock(&pthread_records_lock);
     pthread_record_t *record = NULL;
     int detached = attr && attr->detachstate == PTHREAD_CREATE_DETACHED;
@@ -253,17 +252,12 @@ int pthread_create(pthread_t *tid, const pthread_attr_t *attr,
     }
     *tid = record->tid;
     return 0;
-#endif
 }
 
 int pthread_join(pthread_t tid, void **retval) {
     if (tid < PTHREAD_T_BASE || tid >= PTHREAD_T_BASE + MAX_PTHREADS) {
         return EINVAL;
     }
-#ifdef ARCH_ARM64
-    (void)retval;
-    return EINVAL;
-#else
     pthread_record_t *record = &pthread_records[tid - PTHREAD_T_BASE];
     if (!record->in_use || record->detached) {
         return EINVAL;
@@ -282,7 +276,6 @@ int pthread_join(pthread_t tid, void **retval) {
     record->in_use = 0;
     spin_unlock(&pthread_records_lock);
     return 0;
-#endif
 }
 
 int pthread_detach(pthread_t tid) {

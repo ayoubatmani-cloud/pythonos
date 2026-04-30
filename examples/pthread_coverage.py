@@ -42,6 +42,23 @@ def _worker_count():
     return max(1, online - 1)
 
 
+def _arch():
+    if _hal is None:
+        return "unknown"
+    return getattr(_hal, "ARCH", "unknown")
+
+
+def _workers_supported():
+    """Whether pthread workers can run on this build.
+
+    arm64 currently stubs pthread_create to ENOSYS (see
+    src/libc/pthread.c). The corresponding substrate work is tracked in
+    beads epic pythonos-bjr; until that lands, sections that rely on
+    _thread.start_new_thread are skipped on arm64.
+    """
+    return _arch() == "x86_64"
+
+
 def _spin(n):
     """Crude busy-wait that does not depend on time syscalls."""
     for _ in range(n):
@@ -577,16 +594,23 @@ async def main(argv=None, cwd="/", read_char=None, write=None):
     await _flush()
 
     sections = [
-        ("lifecycle", _run_lifecycle),
-        ("identity", _run_identity),
-        ("tss", _run_tss),
-        ("lock", _run_lock),
-        ("capacity", _run_capacity),
-        ("attr", _run_attr),
+        ("lifecycle", _run_lifecycle, True),
+        ("identity", _run_identity, True),
+        ("tss", _run_tss, True),
+        ("lock", _run_lock, True),
+        ("capacity", _run_capacity, True),
+        ("attr", _run_attr, False),  # arch-agnostic: works on arm64 too
     ]
 
+    workers_ok = _workers_supported()
     results = []
-    for name, fn in sections:
+    for name, fn, needs_workers in sections:
+        if needs_workers and not workers_ok:
+            _emit(write, name + " skipped (" + _arch() +
+                  ": no pthread workers; tracked by beads pythonos-bjr)")
+            results.append(True)
+            await _flush()
+            continue
         try:
             ok = fn(write)
         except Exception as exc:

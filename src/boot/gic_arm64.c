@@ -32,6 +32,14 @@ static inline void gicc_w(uint32_t off, uint32_t v) {
 
 /* ── GIC init ──────────────────────────────────────────────────────────────── */
 
+/* Per-CPU GICv2 CPU interface init. Called once on the BSP from gic_init
+ * and once per AP from ap_entry_arm64_c (src/boot/smp_arm64.c). */
+void gic_cpu_iface_init(void) {
+    gicc_w(0x004, 0xFF);   /* GICC_PMR: priority mask */
+    gicc_w(0x008, 0x07);   /* GICC_BPR: all sub-priority */
+    gicc_w(0x000, 1);      /* GICC_CTLR: enable */
+}
+
 void gic_init(void) {
     /* Disable distributor while configuring */
     gicd_w(0x000, 0);
@@ -56,10 +64,8 @@ void gic_init(void) {
     /* Enable distributor (group 0) */
     gicd_w(0x000, 1);
 
-    /* CPU interface: allow all priorities, enable */
-    gicc_w(0x004, 0xFF);   /* GICC_PMR: priority mask */
-    gicc_w(0x008, 0x07);   /* GICC_BPR: all sub-priority */
-    gicc_w(0x000, 1);      /* GICC_CTLR: enable */
+    /* Per-CPU CPU interface (BSP). */
+    gic_cpu_iface_init();
 }
 
 void gic_enable_irq(int irq) {

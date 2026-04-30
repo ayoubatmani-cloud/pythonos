@@ -60,6 +60,53 @@ _start:
     wfe
     b       .Lhalt
 
+/* ── AP (secondary core) entry stub ──────────────────────────────────────
+ * Called from PSCI CPU_ON. x0 = context_id we passed (the cpu index in
+ * cpus[]). Does the same EL2->EL1 drop and FPU enable as the primary
+ * boot path, then loads sp from ap_stack_top[cpu_idx] and tail-calls
+ * ap_entry_arm64_c() which does MMU + GIC + TLS + runtime loop.
+ * ─────────────────────────────────────────────────────────────────────── */
+.global ap_entry_arm64_asm
+ap_entry_arm64_asm:
+    mov     x19, x0          /* save cpu index across EL drop */
+
+    mrs     x0, CurrentEL
+    lsr     x0, x0, #2
+    cmp     x0, #2
+    bne     .Lap_at_el1
+
+    mov     x0, #(1 << 31)
+    msr     hcr_el2, x0
+    adr     x0, .Lap_at_el1
+    msr     elr_el2, x0
+    mov     x0, #0x3c5
+    msr     spsr_el2, x0
+    msr     sctlr_el1, xzr
+    isb
+    eret
+
+.Lap_at_el1:
+    /* Enable FPU/SIMD */
+    mrs     x0, cpacr_el1
+    orr     x0, x0, #(3 << 20)
+    msr     cpacr_el1, x0
+    isb
+
+    /* Load AP stack pointer from ap_stack_top[x19] */
+    adrp    x0, ap_stack_top
+    add     x0, x0, :lo12:ap_stack_top
+    add     x0, x0, x19, lsl #3
+    ldr     x0, [x0]
+    mov     sp, x0
+
+    /* Tail-call the C entry */
+    mov     x0, x19
+    bl      ap_entry_arm64_c
+
+.Lap_halt:
+    wfe
+    b       .Lap_halt
+
 /* ── Exception vector table ────────────────────────────────────────────────
  * Must be aligned to 2KB (0x800).  AArch64 layout:
  *   0x000–0x180  EL1t (SP_EL0): sync / IRQ / FIQ / SError
