@@ -18,6 +18,7 @@
 #include "../boot/io.h"
 #endif
 #include "../boot/smp.h"
+#include "../linenoise/linenoise.h"
 
 // Python C API callbacks have fixed signatures; many do not use self/args.
 #if defined(__GNUC__)
@@ -535,6 +536,54 @@ static PyObject *py_pthread_attr_selftest(PyObject *self, PyObject *args) {
     return Py_BuildValue("(iO)", cases, Py_None);
 }
 
+// ── linenoise wrappers ───────────────────────────────────────────────────────
+//
+// linenoise (vendored at src/linenoise/) is a small BSD-licensed line
+// editor; on a real tty its blocking linenoise(prompt) does prompt
+// redraw, history navigation, etc. PythonOS exposes the non-blocking
+// utility surface here so Python code can manage history and clear the
+// screen; the blocking call is a thin wrapper that returns the
+// completed line (or None on EOF/Ctrl-C). Reading the input bytes
+// requires a kernel-installed stdin callback (see
+// libc_set_stdin_byte_reader in src/libc/syscalls.c) — without one the
+// blocking call returns immediately via the linenoiseNoTTY fallback.
+
+static PyObject *py_linenoise(PyObject *self, PyObject *args) {
+    const char *prompt = "";
+    if (!PyArg_ParseTuple(args, "|s", &prompt)) return NULL;
+    char *line = linenoise(prompt);
+    if (!line) Py_RETURN_NONE;
+    PyObject *res = PyUnicode_FromString(line);
+    linenoiseFree(line);
+    return res;
+}
+
+static PyObject *py_linenoise_history_add(PyObject *self, PyObject *args) {
+    const char *line;
+    if (!PyArg_ParseTuple(args, "s", &line)) return NULL;
+    return PyLong_FromLong(linenoiseHistoryAdd(line));
+}
+
+static PyObject *py_linenoise_history_set_max_len(PyObject *self,
+                                                   PyObject *args) {
+    int n;
+    if (!PyArg_ParseTuple(args, "i", &n)) return NULL;
+    return PyLong_FromLong(linenoiseHistorySetMaxLen(n));
+}
+
+static PyObject *py_linenoise_clear_screen(PyObject *self, PyObject *args) {
+    (void)args;
+    linenoiseClearScreen();
+    Py_RETURN_NONE;
+}
+
+static PyObject *py_linenoise_set_multi_line(PyObject *self, PyObject *args) {
+    int ml;
+    if (!PyArg_ParseTuple(args, "i", &ml)) return NULL;
+    linenoiseSetMultiLine(ml);
+    Py_RETURN_NONE;
+}
+
 // ── Module definition ─────────────────────────────────────────────────────────
 
 static PyMethodDef hal_methods[] = {
@@ -560,6 +609,11 @@ static PyMethodDef hal_methods[] = {
     {"serial_write",         py_serial_write,         METH_VARARGS, "Write raw text to the early serial console"},
     {"pthread_selftest",     py_pthread_selftest,     METH_NOARGS,  "Run a C-level pthread_create/join smoke test"},
     {"pthread_attr_selftest",py_pthread_attr_selftest,METH_NOARGS,  "Exercise pthread_attr_* / pthread_condattr_* / pthread_mutexattr_* surface"},
+    {"linenoise",            py_linenoise,            METH_VARARGS, "Read a line with linenoise editing (returns None on EOF)"},
+    {"linenoise_history_add",py_linenoise_history_add,METH_VARARGS, "Append a line to linenoise history"},
+    {"linenoise_history_set_max_len", py_linenoise_history_set_max_len, METH_VARARGS, "Set linenoise history capacity"},
+    {"linenoise_clear_screen", py_linenoise_clear_screen, METH_NOARGS, "Clear the terminal screen via VT100 escapes"},
+    {"linenoise_set_multi_line", py_linenoise_set_multi_line, METH_VARARGS, "Enable/disable linenoise multi-line edit mode"},
     {NULL, NULL, 0, NULL}
 };
 

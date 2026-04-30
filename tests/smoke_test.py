@@ -57,6 +57,11 @@ TEST_CASES = [
     ("ls /examples\n",                  "hello_kernel.py"),
     ("vi\n",                            "NameError"),
     ("__import__('_hal').PY_GIL_DISABLED\n", "1" if FREE_THREADING == "1" else "0"),
+    # linenoise wrappers (no-tty path: blocking call returns None
+    # immediately because isatty(STDIN_FILENO)=0 in our libc).
+    ("__import__('_hal').linenoise_history_set_max_len(50)\n", "1"),
+    ("__import__('_hal').linenoise_history_add('test entry')\n", "1"),
+    ("__import__('_hal').linenoise(':no-tty: ') is None\n", "True"),
 ]
 
 if SMP_CPUS.isdigit():

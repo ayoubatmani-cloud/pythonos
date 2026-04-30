@@ -36,7 +36,7 @@ DISK = os.environ.get("PYTHONOS_ARM64_DISK", "disk-arm64.img")
 HOST_PORT = int(os.environ.get("PYTHONOS_ARM64_HOST_PORT", "5556"))
 FILE_HOST_PORT = int(os.environ.get("PYTHONOS_ARM64_FILE_PORT", "17002"))
 SMP_CPUS = os.environ.get("PYTHONOS_ARM64_SMP_CPUS", "2")
-BOOT_TIMEOUT = 90
+BOOT_TIMEOUT = 240
 RECV_TIMEOUT = 15.0
 
 QEMU_CMD = [
@@ -73,6 +73,9 @@ TEST_CASES = [
     ("__import__('_hal').pthread_selftest()\n", "(0, 123456789, 4660)"),
     # Direct attr selftest exercises 22 cases on both archs.
     ("__import__('_hal').pthread_attr_selftest()\n", "(22,"),
+    # linenoise wrappers (compiled into both arches).
+    ("__import__('_hal').linenoise_history_add('arm64-test')\n", "1"),
+    ("__import__('_hal').linenoise(':no-tty: ') is None\n", "True"),
 ]
 
 

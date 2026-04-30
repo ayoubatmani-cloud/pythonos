@@ -123,7 +123,22 @@ void kernel_main_arm64(uint64_t dtb_ptr) {
      * (the default in our Makefile) this no-ops; with -smp 2+ it brings
      * each AP into ap_runtime_loop() ready to take pthread workers. */
     smp_init(NULL);
-    pl011_puts("[PythonOS/arm64] boot: SMP init complete\n");
+    pl011_puts("[PythonOS/arm64] boot: SMP init complete, online=");
+    {
+        char buf[8];
+        unsigned n = smp_online_count();
+        if (n == 0) { buf[0] = '0'; buf[1] = '\n'; buf[2] = 0; }
+        else {
+            int i = 0;
+            char tmp[8];
+            int t = 0;
+            while (n > 0) { tmp[t++] = '0' + (n % 10); n /= 10; }
+            while (t > 0) { buf[i++] = tmp[--t]; }
+            buf[i++] = '\n';
+            buf[i] = 0;
+        }
+        pl011_puts(buf);
+    }
 
     pl011_puts("[PythonOS/arm64] boot: starting Python kernel\n");
     python_kernel_start(boot_mmap, 1, &boot_fb);

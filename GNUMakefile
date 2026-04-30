@@ -127,6 +127,7 @@ PYTHON_LIB := $(CPYTHON)/libpython3.14.a
 COMMON_CFLAGS := -std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
                  -mno-red-zone -Wall -Wextra \
                  -I src/libc/include \
+                 -I src/linenoise \
                  -I $(PYTHON_INC) -I $(CPYTHON)
 
 BOOT_CFLAGS := $(COMMON_CFLAGS) -mno-sse -mno-sse2 -mno-mmx -mno-80387
@@ -147,11 +148,13 @@ HAL_C     := src/hal/hal.c
 LIBC_C    := src/libc/malloc.c  src/libc/string.c  src/libc/stdio.c \
              src/libc/time.c    src/libc/syscalls.c src/libc/math.c  \
              src/libc/pthread.c
+LINENOISE_C := src/linenoise/linenoise.c
 
 BOOT_OBJS := $(patsubst src/%.asm,$(BUILD)/%.asm.o,$(BOOT_ASM))
 BOOT_OBJS += $(patsubst src/%.c,$(BUILD)/%.c.o,$(BOOT_C))
 HAL_OBJS  := $(patsubst src/%.c,$(BUILD)/%.c.o,$(HAL_C))
 LIBC_OBJS := $(patsubst src/%.c,$(BUILD)/%.c.o,$(LIBC_C))
+LINENOISE_OBJS := $(patsubst src/%.c,$(BUILD)/%.c.o,$(LINENOISE_C))
 
 KERNEL_ELF := $(BUILD)/pythonos.elf
 AP_TRAMPOLINE_BIN := $(BUILD)/boot/ap_trampoline.bin
@@ -179,6 +182,12 @@ $(BUILD)/hal/%.c.o: src/hal/%.c
 $(BUILD)/libc/%.c.o: src/libc/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(KERN_CFLAGS) -c $< -o $@
+
+# linenoise warns -Wunused-result on the read/write return values it
+# intentionally discards; suppress to keep the kernel build warning-free.
+$(BUILD)/linenoise/%.c.o: src/linenoise/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(KERN_CFLAGS) -Wno-unused-result -Wno-unused-but-set-variable -c $< -o $@
 
 ENCODINGS_SRC := deps/cpython-src/Lib/encodings
 CPYTHON_LIB   := deps/cpython-src/Lib
@@ -229,7 +238,7 @@ $(BUILD)/frozen_kernel.o: $(BUILD)/frozen_kernel.c
 	@mkdir -p $(BUILD)
 	$(CC) $(KERN_CFLAGS) -c $< -o $@
 
-$(KERNEL_ELF): $(BOOT_OBJS) $(HAL_OBJS) $(LIBC_OBJS) \
+$(KERNEL_ELF): $(BOOT_OBJS) $(HAL_OBJS) $(LIBC_OBJS) $(LINENOISE_OBJS) \
                $(BUILD)/frozen_kernel.o $(PYTHON_LIB)
 	@mkdir -p $(BUILD)
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
@@ -287,6 +296,7 @@ LD_ARM64     := $(TARGET_ARM64)-ld
 CFLAGS_ARM64 := -std=c11 -O2 -ffreestanding -fno-stack-protector -fno-pie \
                 -Wall -Wextra -DARCH_ARM64 -march=armv8-a \
                 -I src/libc/include \
+                -I src/linenoise \
                 -I deps-arm64/cpython/Include -I deps-arm64/cpython
 
 BUILD_ARM64 := build-arm64
@@ -302,6 +312,7 @@ BOOT_ARM64_OBJS := $(BUILD_ARM64)/boot/boot_arm64.S.o \
                    $(patsubst src/%.c,$(BUILD_ARM64)/%.c.o,$(BOOT_ARM64_C))
 HAL_ARM64_OBJS  := $(BUILD_ARM64)/hal/hal.c.o
 LIBC_ARM64_OBJS := $(patsubst src/%.c,$(BUILD_ARM64)/%.c.o,$(LIBC_ARM64_C))
+LINENOISE_ARM64_OBJS := $(patsubst src/%.c,$(BUILD_ARM64)/%.c.o,$(LINENOISE_C))
 
 $(BUILD_ARM64)/boot/boot_arm64.S.o: src/boot/boot_arm64.S
 	@mkdir -p $(dir $@)
@@ -319,11 +330,16 @@ $(BUILD_ARM64)/libc/%.c.o: src/libc/%.c
 	@mkdir -p $(dir $@)
 	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
 
+$(BUILD_ARM64)/linenoise/%.c.o: src/linenoise/%.c
+	@mkdir -p $(dir $@)
+	$(CC_ARM64) $(CFLAGS_ARM64) -Wno-unused-result -Wno-unused-but-set-variable -c $< -o $@
+
 $(BUILD_ARM64)/frozen_kernel.o: $(BUILD)/frozen_kernel.c
 	@mkdir -p $(BUILD_ARM64)
 	$(CC_ARM64) $(CFLAGS_ARM64) -c $< -o $@
 
 _iso_arm64: $(BOOT_ARM64_OBJS) $(HAL_ARM64_OBJS) $(LIBC_ARM64_OBJS) \
+            $(LINENOISE_ARM64_OBJS) \
             $(BUILD_ARM64)/frozen_kernel.o deps-arm64/cpython/libpython3.14.a
 	@mkdir -p $(BUILD_ARM64)
 	$(LD_ARM64) -T linker_arm64.ld -nostdlib -o $(ARM64_ELF) $^ $(LIBGCC_ARM64)

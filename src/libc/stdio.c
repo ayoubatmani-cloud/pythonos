@@ -360,6 +360,12 @@ FILE *fopen(const char *path, const char *mode) {
 
 int fclose(FILE *f) { (void)f; return 0; }
 
+/* fgetc is referenced by linenoise's linenoiseNoTTY() fallback, taken
+ * when stdin is not a tty. Returning EOF immediately is the right
+ * answer for our bare-metal build — the caller terminates input
+ * gracefully and falls back to an empty line. */
+int fgetc(FILE *f) { (void)f; return -1; }
+
 size_t fread(void *ptr, size_t size, size_t n, FILE *f) {
     (void)ptr; (void)size; (void)n; (void)f;
     return 0;

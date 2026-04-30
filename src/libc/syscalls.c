@@ -121,10 +121,47 @@ int open(const char *path, int flags, ...) {
 
 int close(int fd) { (void)fd; return 0; }
 
+/* read(0, ...) routes through a kernel-installed callback so terminal
+ * line editors (linenoise) can pull bytes from whichever input the
+ * kernel has wired up — serial console, PL011, or the TCP REPL byte
+ * stream. The callback returns -1 on EOF, otherwise the next byte.
+ * If no callback is installed, read(0, ...) returns ENOSYS. */
+static int (*_stdin_read_byte)(void) = 0;
+
+void libc_set_stdin_byte_reader(int (*fn)(void)) {
+    _stdin_read_byte = fn;
+}
+
 long read(int fd, void *buf, size_t n) {
-    (void)fd; (void)buf; (void)n;
-    errno = ENOSYS;
-    return -1;
+    if (fd != 0 || !buf || n == 0) {
+        if (fd == 0 && !_stdin_read_byte) {
+            errno = ENOSYS;
+        } else {
+            errno = ENOSYS;
+        }
+        return -1;
+    }
+    if (!_stdin_read_byte) {
+        errno = ENOSYS;
+        return -1;
+    }
+    char *out = (char *)buf;
+    size_t got = 0;
+    while (got < n) {
+        int c = _stdin_read_byte();
+        if (c < 0) {
+            break;
+        }
+        out[got++] = (char)c;
+        if (got >= 1) {
+            /* Single-byte read semantics (linenoise reads one byte at
+             * a time anyway). Stop after the first byte so blocking is
+             * minimized and the caller can decide whether to keep
+             * reading. */
+            break;
+        }
+    }
+    return (long)got;
 }
 
 long write(int fd, const void *buf, size_t n) {
@@ -163,7 +200,53 @@ int lstat(const char *path, void *buf) { (void)path; (void)buf; errno = ENOENT; 
 int access(const char *path, int mode) { (void)path; (void)mode; errno = ENOENT; return -1; }
 
 int fcntl(int fd, int cmd, ...) { (void)fd; (void)cmd; return 0; }
-int ioctl(int fd, unsigned long req, ...) { (void)fd; (void)req; errno = ENOSYS; return -1; }
+int fchmod(int fd, mode_t mode) { (void)fd; (void)mode; return 0; }
+mode_t umask(mode_t mask) { (void)mask; return 0; }
+
+/* Minimal ioctl: serves TIOCGWINSZ for terminal-aware code (linenoise)
+ * by reporting a fixed 80x24 viewport. Other requests fail with ENOSYS. */
+#include <sys/ioctl.h>
+#include <stdarg.h>
+int ioctl(int fd, unsigned long req, ...) {
+    (void)fd;
+    if (req == TIOCGWINSZ) {
+        va_list ap;
+        va_start(ap, req);
+        struct winsize *ws = va_arg(ap, struct winsize *);
+        va_end(ap);
+        if (ws) {
+            ws->ws_row = 24;
+            ws->ws_col = 80;
+            ws->ws_xpixel = 0;
+            ws->ws_ypixel = 0;
+        }
+        return 0;
+    }
+    errno = ENOSYS;
+    return -1;
+}
+
+/* termios stubs: linenoise expects to flip the terminal into raw mode
+ * via tcsetattr(TCSAFLUSH, ...). On bare metal the wire is already in
+ * a minimal state (no kernel line discipline), so these are no-ops
+ * that succeed; linenoise's editing logic does the right thing on top. */
+#include <termios.h>
+int tcgetattr(int fd, struct termios *t) {
+    (void)fd;
+    if (!t) { errno = EINVAL; return -1; }
+    /* Pretend we're in cooked mode so linenoise has something sensible
+     * to restore via tcsetattr later. */
+    t->c_iflag = ICRNL | IXON;
+    t->c_oflag = OPOST;
+    t->c_cflag = CS8;
+    t->c_lflag = ECHO | ICANON | ISIG | IEXTEN;
+    for (int i = 0; i < NCCS; i++) t->c_cc[i] = 0;
+    return 0;
+}
+int tcsetattr(int fd, int act, const struct termios *t) {
+    (void)fd; (void)act; (void)t;
+    return 0;
+}
 
 // ── Memory mapping ────────────────────────────────────────────────────────────
 
