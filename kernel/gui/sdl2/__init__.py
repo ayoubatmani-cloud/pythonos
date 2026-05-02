@@ -60,7 +60,9 @@ def SDL_WasInit(flags: int) -> int:
 from kernel.gui.sdl2 import video as _video    # noqa: E402
 from kernel.gui.sdl2 import surface as _surface  # noqa: E402
 from kernel.gui.sdl2 import events as _events   # noqa: E402
+from kernel.gui.sdl2 import render as _render   # noqa: E402
 from kernel.gui.sdl2 import sdlmixer as _mixer  # noqa: E402
+from kernel.gui.sdl2 import sdlttf as _ttf      # noqa: E402
 
 # Window / video
 SDL_WINDOWPOS_UNDEFINED = _video.SDL_WINDOWPOS_UNDEFINED
@@ -87,6 +89,23 @@ SDL_MapRGBA             = _surface.SDL_MapRGBA
 SDL_FreeSurface         = _surface.SDL_FreeSurface
 SDL_BlitSurface         = _surface.SDL_BlitSurface
 SDL_LoadBMP             = _surface.SDL_LoadBMP
+
+# Renderer
+SDL_Renderer            = _render.SDL_Renderer
+SDL_Texture             = _render.SDL_Texture
+SDL_RENDERER_SOFTWARE   = _render.SDL_RENDERER_SOFTWARE
+SDL_RENDERER_ACCELERATED = _render.SDL_RENDERER_ACCELERATED
+SDL_RENDERER_PRESENTVSYNC = _render.SDL_RENDERER_PRESENTVSYNC
+SDL_CreateRenderer      = _render.SDL_CreateRenderer
+SDL_DestroyRenderer     = _render.SDL_DestroyRenderer
+SDL_SetRenderDrawColor  = _render.SDL_SetRenderDrawColor
+SDL_RenderClear         = _render.SDL_RenderClear
+SDL_RenderFillRect      = _render.SDL_RenderFillRect
+SDL_RenderDrawRect      = _render.SDL_RenderDrawRect
+SDL_RenderCopy          = _render.SDL_RenderCopy
+SDL_RenderPresent       = _render.SDL_RenderPresent
+SDL_CreateTextureFromSurface = _render.SDL_CreateTextureFromSurface
+SDL_DestroyTexture      = _render.SDL_DestroyTexture
 
 # Events
 SDL_Event               = _events.SDL_Event
@@ -124,6 +143,17 @@ KMOD_LCTRL              = _events.KMOD_LCTRL
 KMOD_CTRL               = _events.KMOD_CTRL
 KMOD_LALT               = _events.KMOD_LALT
 KMOD_ALT                = _events.KMOD_ALT
+
+# Mixer (compat alias namespace)
+# TTF
+TTF_Init                = _ttf.TTF_Init
+TTF_Quit                = _ttf.TTF_Quit
+TTF_OpenFont            = _ttf.TTF_OpenFont
+TTF_CloseFont           = _ttf.TTF_CloseFont
+TTF_RenderText_Blended  = _ttf.TTF_RenderText_Blended
+TTF_RenderText_Solid    = _ttf.TTF_RenderText_Solid
+TTF_SizeText            = _ttf.TTF_SizeText
+TTF_Font                = _ttf.TTF_Font
 
 # Mixer (compat alias namespace)
 Mix_OpenAudio           = _mixer.Mix_OpenAudio

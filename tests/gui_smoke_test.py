@@ -151,6 +151,16 @@ def main() -> int:
         check("examples/sdl_hello.py runs", "sdl_hello: ok" in out,
               detail=out.splitlines()[-1] if out.strip() else "(empty)")
 
+        # 1b. SDL_Renderer corpus item.
+        out = _send(s, "run('/examples/sdl_renderer.py')", wait=4.5)
+        check("examples/sdl_renderer.py runs", "sdl_renderer: ok" in out,
+              detail=out.splitlines()[-1] if out.strip() else "(empty)")
+
+        # 1c. TTF corpus item.
+        out = _send(s, "run('/examples/sdl_text.py')", wait=4.5)
+        check("examples/sdl_text.py runs", "sdl_text: ok" in out,
+              detail=out.splitlines()[-1] if out.strip() else "(empty)")
+
         # 2. /bin/pythonos_gui.py is registered.
         out = _send(s, "sh('ls /bin')", wait=3.0)
         check("/bin/pythonos_gui.py present",
