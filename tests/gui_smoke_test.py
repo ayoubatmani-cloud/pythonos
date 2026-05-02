@@ -24,11 +24,19 @@ import subprocess
 import sys
 import time
 
+# Allow `python3 tests/gui_smoke_test.py` from the repo root or anywhere.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from qmp_helper import (
+    QemuMonitor, parse_ppm, sample_pixel, color_close,
+)
+
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
 PORT = int(os.environ.get("PYTHONOS_GUI_HOST_PORT", "5559"))
 BOOT_TIMEOUT = float(os.environ.get("PYTHONOS_GUI_BOOT_TIMEOUT", "30"))
 
 SERIAL_LOG = "/tmp/pythonos-gui-smoke.log"
+MONITOR_SOCK = "/tmp/pythonos-gui-smoke.mon.sock"
+SCREENDUMP   = "/tmp/pythonos-gui-smoke.ppm"
 
 
 def _qemu_cmd():
@@ -48,6 +56,7 @@ def _qemu_cmd():
         "-display", "none",
         "-vga", "std",
         "-serial", f"file:{SERIAL_LOG}",
+        "-monitor", f"unix:{MONITOR_SOCK},server,nowait",
     ]
 
 
@@ -93,8 +102,12 @@ def _drain(s: socket.socket, wait: float = 1.0) -> None:
 
 
 def main() -> int:
-    if os.path.exists(SERIAL_LOG):
-        os.remove(SERIAL_LOG)
+    for path in (SERIAL_LOG, MONITOR_SOCK, SCREENDUMP):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     print(f"[gui-smoke] booting {ISO} headless+vga-std on TCP {PORT}")
     proc = subprocess.Popen(_qemu_cmd(),
@@ -155,6 +168,58 @@ def main() -> int:
         check("kernel.gui.compositor.Compositor importable",
               "Compositor" in out,
               detail=(out.strip().splitlines()[-1] if out.strip() else ""))
+
+        # 5. Pixel-level screendump verification via QEMU monitor.
+        # We paint a known-color rectangle directly into the framebuffer
+        # via the kernel.display.framebuffer.fb singleton, then capture
+        # a screendump and sample pixels. The test is independent of any
+        # boot text or cursor positioning because it samples coordinates
+        # we just wrote into.
+        _send(s, "_fb_mod = __import__('kernel.display.framebuffer', fromlist=['fb'])", wait=1.0)
+        _send(s, "_fb = _fb_mod.fb", wait=1.0)
+        out = _send(s, "(_fb.width, _fb.height)", wait=1.5)
+        check("framebuffer accessible",
+              "1024" in out and "768" in out,
+              detail=(out.strip().splitlines()[-1] if out.strip() else ""))
+        # Pure blue: B=0xFF in our XRGB packing (R<<16|G<<8|B → 0x0000FF).
+        _send(s, "_fb.fill_rect(100, 100, 80, 80, 0x0000FF)", wait=1.5)
+
+        try:
+            mon = QemuMonitor(MONITOR_SOCK, connect_timeout=8.0)
+        except Exception as e:
+            check("QEMU monitor reachable", False, detail=str(e))
+            mon = None
+
+        if mon is not None:
+            try:
+                mon.screendump(SCREENDUMP)
+                check("screendump captured", os.path.getsize(SCREENDUMP) > 100)
+
+                w, h, rgb = parse_ppm(SCREENDUMP)
+                check("screendump is 1024x768",
+                      w == 1024 and h == 768,
+                      detail=f"{w}x{h}")
+
+                # The 80x80 blue rect we just painted lives at (100..179,
+                # 100..179). Sample its centre.
+                px = sample_pixel(w, rgb, 140, 140)
+                check("blue rect centre is blue",
+                      color_close(px, (0, 0, 255), tolerance=8),
+                      detail=f"rgb={px}")
+
+                # Outside the rect the pixel must NOT be that exact blue.
+                px = sample_pixel(w, rgb, 5, 5)
+                check("corner pixel is not blue rect",
+                      not color_close(px, (0, 0, 255), tolerance=8),
+                      detail=f"rgb={px}")
+
+                # Demonstrate sendkey path; we can't easily round-trip
+                # observe a key event in this test (no app focused), but
+                # the command should at least dispatch without error.
+                mon.sendkey("a")
+                check("sendkey dispatched", True, detail="(monitor accepted)")
+            finally:
+                mon.close()
 
         # Inspect serial log markers.
         try:
