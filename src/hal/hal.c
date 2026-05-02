@@ -190,6 +190,78 @@ static PyObject *py_mmio_write8(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+// Bulk fill: write `count` 32-bit words starting at `addr` with `val`.
+// Equivalent to a memset_pattern4 over MMIO. Replaces per-pixel loops
+// in the framebuffer for fill / fill_rect.
+static PyObject *py_mmio_fill32(PyObject *self, PyObject *args) {
+    unsigned long long addr;
+    Py_ssize_t count;
+    unsigned int val;
+    if (!PyArg_ParseTuple(args, "KnI", &addr, &count, &val)) return NULL;
+    volatile uint32_t *p = (volatile uint32_t *)(uintptr_t)addr;
+    for (Py_ssize_t i = 0; i < count; i++) p[i] = (uint32_t)val;
+    Py_RETURN_NONE;
+}
+
+// Bulk write: copy a Python bytes-like buffer into MMIO at `addr` as
+// 32-bit words. `src` length must be a multiple of 4. Replaces the
+// per-pixel blit loop in Framebuffer.blit.
+static PyObject *py_mmio_write_buf32(PyObject *self, PyObject *args) {
+    unsigned long long addr;
+    Py_buffer buf;
+    if (!PyArg_ParseTuple(args, "Ky*", &addr, &buf)) return NULL;
+    if (buf.len % 4 != 0) {
+        PyBuffer_Release(&buf);
+        PyErr_SetString(PyExc_ValueError, "buffer length must be multiple of 4");
+        return NULL;
+    }
+    volatile uint32_t *dst = (volatile uint32_t *)(uintptr_t)addr;
+    const uint32_t *src = (const uint32_t *)buf.buf;
+    Py_ssize_t words = buf.len / 4;
+    for (Py_ssize_t i = 0; i < words; i++) dst[i] = src[i];
+    PyBuffer_Release(&buf);
+    Py_RETURN_NONE;
+}
+
+// In-place fill of a writable buffer (e.g. bytearray) with a 32-bit
+// pattern. Avoids the `pixel * (w*h)` allocation pattern used in
+// software-surface fill paths — important when the compositor paints a
+// full back buffer (3 MB on 1024x768) every frame.
+static PyObject *py_buf_fill32(PyObject *self, PyObject *args) {
+    Py_buffer buf;
+    unsigned int val;
+    if (!PyArg_ParseTuple(args, "w*I", &buf, &val)) return NULL;
+    if (buf.len % 4 != 0) {
+        PyBuffer_Release(&buf);
+        PyErr_SetString(PyExc_ValueError, "buffer length must be multiple of 4");
+        return NULL;
+    }
+    uint32_t *p = (uint32_t *)buf.buf;
+    Py_ssize_t words = buf.len / 4;
+    for (Py_ssize_t i = 0; i < words; i++) p[i] = (uint32_t)val;
+    PyBuffer_Release(&buf);
+    Py_RETURN_NONE;
+}
+
+// Per-row in-place fill of a writable buffer: write `count` 32-bit
+// words at byte offset `off`. Used by Surface.fill_rect to avoid
+// allocating a fresh `pixel * span` bytes object per row.
+static PyObject *py_buf_fill32_at(PyObject *self, PyObject *args) {
+    Py_buffer buf;
+    Py_ssize_t off, count;
+    unsigned int val;
+    if (!PyArg_ParseTuple(args, "w*nnI", &buf, &off, &count, &val)) return NULL;
+    if (off < 0 || count < 0 || (off + count * 4) > buf.len) {
+        PyBuffer_Release(&buf);
+        PyErr_SetString(PyExc_ValueError, "off/count out of range");
+        return NULL;
+    }
+    uint32_t *p = (uint32_t *)((char *)buf.buf + off);
+    for (Py_ssize_t i = 0; i < count; i++) p[i] = (uint32_t)val;
+    PyBuffer_Release(&buf);
+    Py_RETURN_NONE;
+}
+
 // ── PIT tick counter (incremented on every timer interrupt before Python dispatch)
 extern void pit_tick(void);   // defined in src/libc/time.c (or main_arm64.c on arm64)
 
@@ -880,6 +952,10 @@ static PyMethodDef hal_methods[] = {
     {"mmio_read32",          py_mmio_read32,          METH_VARARGS, "MMIO read dword"},
     {"mmio_write32",         py_mmio_write32,         METH_VARARGS, "MMIO write dword"},
     {"mmio_write8",          py_mmio_write8,          METH_VARARGS, "MMIO write byte"},
+    {"mmio_fill32",          py_mmio_fill32,          METH_VARARGS, "MMIO fill: write `count` 32-bit words with the same value"},
+    {"mmio_write_buf32",     py_mmio_write_buf32,     METH_VARARGS, "MMIO bulk write: copy a 4-byte-multiple bytes-like buffer as 32-bit words"},
+    {"buf_fill32",           py_buf_fill32,           METH_VARARGS, "Fill a writable buffer with a 32-bit pattern (in-place, no alloc)"},
+    {"buf_fill32_at",        py_buf_fill32_at,        METH_VARARGS, "Fill `count` 32-bit words at byte offset `off` of a writable buffer"},
     {"invlpg",               HAL_INVLPG,              METH_VARARGS, "Invalidate TLB entry"},
     {"set_interrupt_router", py_set_interrupt_router, METH_VARARGS, "Register Python interrupt dispatcher"},
     {"set_event_loop",       py_set_event_loop,       METH_VARARGS, "Register asyncio event loop for threadsafe dispatch"},

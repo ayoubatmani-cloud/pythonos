@@ -25,6 +25,10 @@ mmio_read8   = _hal.mmio_read8
 mmio_read32  = _hal.mmio_read32
 mmio_write32 = _hal.mmio_write32
 mmio_write8  = _hal.mmio_write8
+mmio_fill32      = _hal.mmio_fill32       # bulk fill: count×u32 = val
+mmio_write_buf32 = _hal.mmio_write_buf32  # bulk write: bytes-like → mmio
+buf_fill32       = _hal.buf_fill32        # in-place buffer fill (no alloc)
+buf_fill32_at    = _hal.buf_fill32_at     # in-place row fill at offset
 
 
 def set_interrupt_router(fn) -> None:

@@ -9,7 +9,11 @@ Coordinate system: (0,0) = top-left.
 
 
 from dataclasses import dataclass
-from kernel.hal.io import mmio_write32, mmio_read32
+from kernel.hal.io import (
+    mmio_write32, mmio_read32,
+    mmio_fill32, mmio_write_buf32,
+    buf_fill32, buf_fill32_at,
+)
 from kernel.display.font import get_glyph, GLYPH_W, GLYPH_H
 
 
@@ -61,23 +65,44 @@ class Surface:
         return (self._buf[o + 2] << 16) | (self._buf[o + 1] << 8) | self._buf[o]
 
     def fill(self, colour: int) -> None:
-        b = colour & 0xFF
-        g = (colour >> 8)  & 0xFF
-        r = (colour >> 16) & 0xFF
-        pixel = bytes([b, g, r, 0xFF])
-        self._buf[:] = pixel * (self.width * self.height)
+        # In-place uint32 fill via the C HAL primitive. Avoids the
+        # `bytes(...) * (w*h)` allocation that dominated the per-frame
+        # cost of a 1024x768 back-buffer compose.
+        word = ((colour & 0xFFFFFF) | 0xFF000000)  # XRGB → BGRX little-endian
+        buf_fill32(self._buf, word)
 
     def fill_rect(self, x: int, y: int, w: int, h: int, colour: int) -> None:
         x1 = max(0, x);       y1 = max(0, y)
         x2 = min(self.width, x + w)
         y2 = min(self.height, y + h)
-        b = colour & 0xFF
-        g = (colour >> 8)  & 0xFF
-        r = (colour >> 16) & 0xFF
-        pixel = bytes([b, g, r, 0xFF])
+        if x2 <= x1 or y2 <= y1:
+            return
+        word = ((colour & 0xFFFFFF) | 0xFF000000)
+        span = x2 - x1
         for row in range(y1, y2):
-            o = (row * self.width + x1) * 4
-            self._buf[o:o + (x2 - x1) * 4] = pixel * (x2 - x1)
+            buf_fill32_at(self._buf, (row * self.width + x1) * 4, span, word)
+
+    def blit_buffer(self, buf, src_w: int, src_h: int,
+                     dst_x: int, dst_y: int) -> None:
+        """Copy a BGRX-formatted bytes-like buffer (src_w*src_h*4 bytes)
+        into this surface at (dst_x, dst_y). Used by the compositor to
+        composite window pixels into an off-screen back buffer."""
+        sy0 = max(0, -dst_y)
+        sy1 = min(src_h, self.height - dst_y)
+        if sy1 <= sy0:
+            return
+        sx0 = max(0, -dst_x)
+        sx1 = min(src_w, self.width - dst_x)
+        if sx1 <= sx0:
+            return
+        row_bytes = (sx1 - sx0) * 4
+        for sy in range(sy0, sy1):
+            dy = dst_y + sy
+            src_off = (sy * src_w + sx0) * 4
+            dst_off = (dy * self.width + dst_x + sx0) * 4
+            self._buf[dst_off:dst_off + row_bytes] = (
+                buf[src_off:src_off + row_bytes]
+            )
 
     def draw_char(self, x: int, y: int, char: str,
                   fg: int = WHITE, bg: int | None = None) -> None:
@@ -129,37 +154,101 @@ class Framebuffer:
             mmio_write32(self._pixel_addr(x, y), colour)
 
     def fill(self, colour: int) -> None:
+        # Whole framebuffer is contiguous when pitch == width*bpp (the
+        # common case for ramfb and bochs-VBE). Fall back to per-row
+        # bulk fills if pitch has padding.
+        bpp = self._bytes_per_pixel
+        if self.pitch == self.width * bpp:
+            mmio_fill32(self.phys, self.width * self.height, colour)
+            return
         for y in range(self.height):
-            row_base = self.phys + y * self.pitch
-            for x in range(self.width):
-                mmio_write32(row_base + x * self._bytes_per_pixel, colour)
+            mmio_fill32(self.phys + y * self.pitch, self.width, colour)
+
+    def present(self, buf) -> None:
+        """Bulk-flush a back buffer (BGRX, width*height*4 bytes) to the
+        visible framebuffer in a single MMIO write per frame. The whole
+        composited image becomes visible at once — no flicker between a
+        clear and the per-window blits."""
+        bpp = self._bytes_per_pixel
+        if self.pitch == self.width * bpp:
+            mmio_write_buf32(self.phys, buf)
+            return
+        # Paddedpitch: copy row by row.
+        row_bytes = self.width * 4
+        mv = memoryview(buf)
+        for y in range(self.height):
+            src_off = y * row_bytes
+            mmio_write_buf32(self.phys + y * self.pitch,
+                              mv[src_off:src_off + row_bytes])
 
     def fill_rect(self, x: int, y: int, w: int, h: int, colour: int) -> None:
-        for row in range(max(0, y), min(self.height, y + h)):
-            row_base = self.phys + row * self.pitch
-            for col in range(max(0, x), min(self.width, x + w)):
-                mmio_write32(row_base + col * self._bytes_per_pixel, colour)
+        x1 = max(0, x); y1 = max(0, y)
+        x2 = min(self.width, x + w); y2 = min(self.height, y + h)
+        if x2 <= x1 or y2 <= y1:
+            return
+        bpp = self._bytes_per_pixel
+        span = x2 - x1
+        for row in range(y1, y2):
+            mmio_fill32(self.phys + row * self.pitch + x1 * bpp,
+                        span, colour)
 
     def blit(self, surface: Surface, dst_x: int = 0, dst_y: int = 0) -> None:
-        """Copy surface pixel buffer to framebuffer."""
+        """Copy a kernel.display.Surface pixel buffer to the framebuffer."""
+        self.blit_buffer(surface._buf, surface.width, surface.height,
+                          dst_x, dst_y)
+
+    def blit_buffer(self, buf, src_w: int, src_h: int,
+                     dst_x: int, dst_y: int) -> None:
+        """Copy any BGRX/XRGB-formatted bytes-like buffer to the framebuffer
+        in bulk row writes. Source layout is `src_w * src_h * 4` bytes
+        (B, G, R, X per pixel) — the same order ramfb / bochs-VBE expect
+        for XRGB8888 little-endian on both x86_64 and arm64.
+
+        Used by Framebuffer.blit (kernel.display.Surface) and by the
+        compositor (sdl2.SDL_Surface, which uses the same layout).
+        """
         bpp = self._bytes_per_pixel
-        for sy in range(surface.height):
+        # Vertical clip.
+        sy0 = max(0, -dst_y)
+        sy1 = min(src_h, self.height - dst_y)
+        if sy1 <= sy0:
+            return
+        # Horizontal: bulk path requires dst_x >= 0. Fall back per-pixel
+        # only for the rare off-screen-left case.
+        if dst_x < 0:
+            return self._blit_buffer_slow(buf, src_w, src_h, dst_x, dst_y)
+        sx_count = min(src_w, self.width - dst_x)
+        if sx_count <= 0:
+            return
+        row_bytes = sx_count * 4
+        mv = memoryview(buf)
+        for sy in range(sy0, sy1):
+            dy = dst_y + sy
+            src_off = sy * src_w * 4
+            mmio_write_buf32(self.phys + dy * self.pitch + dst_x * bpp,
+                              mv[src_off:src_off + row_bytes])
+
+    def _blit_buffer_slow(self, buf, src_w: int, src_h: int,
+                            dst_x: int, dst_y: int) -> None:
+        """Per-pixel fallback for off-screen-left blits (rare path)."""
+        bpp = self._bytes_per_pixel
+        for sy in range(src_h):
             dy = dst_y + sy
             if dy < 0 or dy >= self.height:
                 continue
-            fb_row  = self.phys + dy * self.pitch + dst_x * bpp
-            src_off = sy * surface.width * 4
-            for sx in range(surface.width):
+            fb_row  = self.phys + dy * self.pitch
+            src_off = sy * src_w * 4
+            for sx in range(src_w):
                 dx = dst_x + sx
                 if dx < 0 or dx >= self.width:
                     continue
                 so = src_off + sx * 4
                 pixel = (
-                    (surface._buf[so + 2] << 16) |
-                    (surface._buf[so + 1] << 8)  |
-                     surface._buf[so]
+                    (buf[so + 2] << 16) |
+                    (buf[so + 1] << 8)  |
+                     buf[so]
                 )
-                mmio_write32(fb_row + sx * bpp, pixel)
+                mmio_write32(fb_row + dx * bpp, pixel)
 
     def draw_char(self, x: int, y: int, char: str,
                   fg: int = WHITE, bg: int | None = None) -> None:

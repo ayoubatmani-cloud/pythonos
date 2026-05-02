@@ -76,13 +76,13 @@ class SDL_Surface:
     def _fill_rect(self, x: int, y: int, w: int, h: int, color: int) -> None:
         x1 = max(0, x); y1 = max(0, y)
         x2 = min(self.w, x + w); y2 = min(self.h, y + h)
-        b =  color        & 0xFF
-        g = (color >>  8) & 0xFF
-        r = (color >> 16) & 0xFF
-        pixel = bytes((b, g, r, 0xFF))
+        if x2 <= x1 or y2 <= y1:
+            return
+        from kernel.hal.io import buf_fill32_at
+        word = (color & 0xFFFFFF) | 0xFF000000   # XRGB → BGRX little-endian
+        span = x2 - x1
         for row in range(y1, y2):
-            o = (row * self.w + x1) * 4
-            self.pixels[o : o + (x2 - x1) * 4] = pixel * (x2 - x1)
+            buf_fill32_at(self.pixels, (row * self.w + x1) * 4, span, word)
 
     def _blit(self, src: "SDL_Surface", dst_x: int, dst_y: int) -> None:
         for sy in range(src.h):

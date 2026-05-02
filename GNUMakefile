@@ -36,10 +36,19 @@ endif
 HOST_OS := $(shell uname -s)
 ifeq ($(HOST_OS),Darwin)
 HOST_ACCEL := hvf
+# Homebrew QEMU on macOS is typically built with cocoa (not SDL); audio uses
+# CoreAudio. Override with QEMU_DISPLAY=sdl QEMU_AUDIODEV=sdl on builds that
+# include SDL support.
+QEMU_DISPLAY  ?= cocoa
+QEMU_AUDIODEV ?= coreaudio
 else ifeq ($(HOST_OS),Linux)
 HOST_ACCEL := kvm
+QEMU_DISPLAY  ?= sdl
+QEMU_AUDIODEV ?= sdl
 else
 HOST_ACCEL :=
+QEMU_DISPLAY  ?= sdl
+QEMU_AUDIODEV ?= sdl
 endif
 
 # TARGET_ARCH: which arch the dispatch targets (all/run/test/stop/restart)
@@ -102,14 +111,14 @@ QEMU_GUI_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SM
               -netdev user,id=net0,hostfwd=tcp::$(REPL_HOST_PORT)-:5000,hostfwd=tcp::$(FILE_HOST_PORT)-:7000 -device virtio-net-pci,netdev=net0 \
               -device intel-hda -device hda-duplex \
               -no-reboot -no-shutdown \
-              -cdrom $(ISO_OUT) -boot d -display sdl -vga std -serial stdio
+              -cdrom $(ISO_OUT) -boot d -display $(QEMU_DISPLAY) -vga std -serial stdio
 
 # ── User-facing targets ───────────────────────────────────────────────────────
 
 .PHONY: all build run start stop restart test clean cleanall docker-build help \
         _freeze _iso _libpython \
         x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 run-desktop-x86_64 \
-        arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 _iso_arm64 \
+        arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 run-desktop-arm64 _iso_arm64 \
         run-gui test-gui run-desktop
 
 
@@ -179,7 +188,7 @@ run:         run-arm64
 stop:        stop-arm64
 test:        test-arm64
 run-gui:     run-gui-arm64
-run-desktop: run-gui-arm64    # arm64 desktop auto-launch awaits virtio-input
+run-desktop: run-desktop-arm64
 else
 all:         x86_64
 run:         run-x86_64
@@ -210,7 +219,8 @@ run-gui-x86_64: $(ISO_OUT)
 # `make run-desktop-x86_64 PYTHONOS_DESKTOP_APP=terminal` (or editor / files /
 # image_viewer / audio_tone).
 run-desktop-x86_64: $(ISO_OUT)
-	python3 tools/run_desktop.py $(ISO_OUT)
+	QEMU_DISPLAY=$(QEMU_DISPLAY) QEMU_AUDIODEV=$(QEMU_AUDIODEV) \
+	    python3 tools/run_desktop.py $(ISO_OUT)
 
 stop-x86_64:
 	@pkill -f "qemu-system-x86_64.*$(ISO_OUT)" || echo "No x86_64 QEMU running."
@@ -458,9 +468,9 @@ QEMU_ARM64_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2G -s
 # ramfb via fw_cfg at boot — see kernel/drivers/display/ramfb.py.
 QEMU_ARM64_GUI_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2G -smp $(ARM64_SMP_CPUS) \
                     -no-reboot -no-shutdown \
-                    -display sdl -device ramfb -serial stdio \
+                    -display $(QEMU_DISPLAY) -device ramfb -serial stdio \
                     -device virtio-keyboard-device -device virtio-tablet-device \
-                    -audiodev sdl,id=a -device virtio-sound-device,audiodev=a \
+                    -audiodev $(QEMU_AUDIODEV),id=a -device virtio-sound-device,audiodev=a \
                     -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img
@@ -485,6 +495,14 @@ run-gui-arm64: $(ARM64_ELF) $(ARM64_DISK)
 	    -drive if=none,file=$(ARM64_DISK),format=raw,id=hd0 \
 	    -device virtio-blk-device,drive=hd0 \
 	    -kernel $(ARM64_ELF)
+
+# arm64 desktop mode: like run-gui-arm64 but auto-launches `pythonos_gui`
+# over the TCP REPL once the kernel comes up. Override the boot app with
+# PYTHONOS_DESKTOP_APP=terminal (or editor / files / image_viewer / audio_tone).
+run-desktop-arm64: $(ARM64_ELF) $(ARM64_DISK)
+	PYTHONOS_DESKTOP_ARCH=arm64 PYTHONOS_ARM64_DISK=$(ARM64_DISK) \
+	    QEMU_DISPLAY=$(QEMU_DISPLAY) QEMU_AUDIODEV=$(QEMU_AUDIODEV) \
+	    python3 tools/run_desktop.py $(ARM64_ELF)
 
 stop-arm64:
 	@pkill -f "qemu-system-aarch64.*$(ARM64_ELF)" || echo "No arm64 QEMU running."

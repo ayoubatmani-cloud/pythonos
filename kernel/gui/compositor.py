@@ -83,6 +83,11 @@ class Compositor:
         self._drag_win: CompositorWindow | None = None
         self._drag_off_x = 0
         self._drag_off_y = 0
+        # Off-screen back buffer (kernel.display.Surface). Lazy-allocated
+        # the first time we have a framebuffer to size against. Painting
+        # a full frame to this and then presenting in one bulk MMIO write
+        # eliminates the clear→paint flicker.
+        self._back: 'Surface | None' = None
 
     # ── Window registry ─────────────────────────────────────────────────────
 
@@ -136,14 +141,7 @@ class Compositor:
     def _paint_window_body(self, win: CompositorWindow, fb) -> None:
         body_y = win.y + (TITLE_BAR_H if win.chrome else 0)
         s = win.surface
-        for sy in range(min(s.h, fb.height - body_y)):
-            fy = body_y + sy
-            for sx in range(min(s.w, fb.width - win.x)):
-                o = (sy * s.w + sx) * 4
-                pix = ((s.pixels[o + 2] << 16) |
-                       (s.pixels[o + 1] << 8)  |
-                        s.pixels[o])
-                fb.put_pixel(win.x + sx, fy, pix)
+        fb.blit_buffer(s.pixels, s.w, s.h, win.x, body_y)
 
     def _redraw(self) -> None:
         fb = _fb_mod.fb
@@ -152,14 +150,21 @@ class Compositor:
         any_dirty = any(w.dirty for w in self._windows)
         if not any_dirty:
             return
-        # Full-screen clear is cheap relative to per-window blit; keeps
-        # things correct when windows move or close. v1 will track dirty
-        # rects properly.
-        fb.fill(self._desktop_bg)
+        # Compose the entire frame into an off-screen back buffer, then
+        # blast the whole thing to the visible framebuffer in one MMIO
+        # bulk write. v1 will track dirty rects properly; for now the
+        # full-screen present is fast enough and avoids flicker.
+        if self._back is None or \
+                self._back.width != fb.width or self._back.height != fb.height:
+            from kernel.display.framebuffer import Surface
+            self._back = Surface(fb.width, fb.height)
+        back = self._back
+        back.fill(self._desktop_bg)
         for win in self._windows:
-            self._paint_chrome(win, fb)
-            self._paint_window_body(win, fb)
+            self._paint_chrome(win, back)
+            self._paint_window_body(win, back)
             win.dirty = False
+        fb.present(back._buf)
 
     # ── Hit-testing & focus ─────────────────────────────────────────────────
 
