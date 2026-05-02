@@ -44,9 +44,8 @@ def load_bytes(data: bytes) -> SDL_Surface:
         from kernel.gui.image.bmp import decode_bmp
         return decode_bmp(data)
     if fmt == "jpeg":
-        raise NotImplementedError(
-            "JPEG: decoder needs Huffman+DCT pure-Python implementation "
-            "(GUI Phase 6 follow-up)")
+        from kernel.gui.image.jpeg import decode_jpeg
+        return decode_jpeg(data)
     raise ValueError("image.load_bytes: unsupported format")
 
 

@@ -167,6 +167,12 @@ def main() -> int:
               "sdl_image: ok" in out,
               detail=out.splitlines()[-1] if out.strip() else "(empty)")
 
+        # 1e. JPEG decoder corpus item — decode an embedded 8x8 baseline JPEG.
+        out = _send(s, "run('/examples/sdl_jpeg.py')", wait=10.0)
+        check("examples/sdl_jpeg.py runs (JPEG decode)",
+              "sdl_jpeg: ok" in out,
+              detail=out.splitlines()[-1] if out.strip() else "(empty)")
+
         # 2. /bin/pythonos_gui.py is registered.
         out = _send(s, "sh('ls /bin')", wait=3.0)
         check("/bin/pythonos_gui.py present",
