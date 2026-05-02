@@ -130,9 +130,8 @@ async def _kernel_main(
         console.writeln(f"RAM: {pmm.free_pages * 4096 // 1024 // 1024} MiB free")
         log.info("kernel: framebuffer console ready")
         # Bring the GUI input substrate up alongside the framebuffer.
-        # On x86 this hooks both the PS/2 keyboard (IRQ1) and the PS/2
-        # mouse (IRQ12); arm64 virtio-input is tracked separately and
-        # does nothing here yet.
+        # x86: PS/2 keyboard (IRQ1) + PS/2 mouse (IRQ12).
+        # arm64: virtio-input keyboard via virtio-mmio (mouse follow-up).
         try:
             from kernel.gui import input as _gui_input
             _gui_input.init()
@@ -140,6 +139,12 @@ async def _kernel_main(
                 _gui_input.install_ps2_bridge()
                 _gui_input.install_ps2_mouse_bridge(fb.width, fb.height)
                 log.info("kernel: GUI input ready (PS/2 kbd+mouse)")
+            else:
+                from kernel.drivers.input import virtio_input
+                if virtio_input.install_virtio_input_bridge(scheduler):
+                    log.info("kernel: GUI input ready (virtio-input)")
+                else:
+                    log.info("kernel: no virtio-input device found")
         except Exception as e:
             log.info(f"kernel: GUI input setup failed: {e}")
     else:
