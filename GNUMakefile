@@ -306,7 +306,8 @@ $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON
                         tools/stdlib_stubs/ctypes/__init__.py \
                         tools/stdlib_stubs/random.py \
                         tools/stdlib_stubs/traceback.py \
-                        tools/stdlib_stubs/linecache.py
+                        tools/stdlib_stubs/linecache.py \
+                        tools/stdlib_stubs/sdl2.py
 	@mkdir -p $(STDLIB_SHIM)/re $(STDLIB_SHIM)/collections $(STDLIB_SHIM)/ctypes
 	@$(foreach f,$(STDLIB_REAL_FILES),cp $(CPYTHON_LIB)/$(f) $(STDLIB_SHIM)/$(f);)
 	@cp $(CPYTHON_LIB)/re/__init__.py    $(STDLIB_SHIM)/re/
@@ -325,6 +326,7 @@ $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON
 	@cp tools/stdlib_stubs/random.py      $(STDLIB_SHIM)/random.py
 	@cp tools/stdlib_stubs/traceback.py   $(STDLIB_SHIM)/traceback.py
 	@cp tools/stdlib_stubs/linecache.py   $(STDLIB_SHIM)/linecache.py
+	@cp tools/stdlib_stubs/sdl2.py        $(STDLIB_SHIM)/sdl2.py
 	@touch $@
 
 _freeze: $(STDLIB_SHIM)/.stamp
