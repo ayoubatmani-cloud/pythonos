@@ -108,9 +108,9 @@ QEMU_GUI_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SM
 
 .PHONY: all run start stop restart test clean cleanall docker-build \
         _freeze _iso _libpython \
-        x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 \
+        x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 \
         arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 _iso_arm64 \
-        run-gui
+        run-gui test-gui
 
 # Top-level dispatch. These pick x86_64 or arm64 based on TARGET_ARCH (which
 # defaults to the host arch). Explicit per-arch targets are listed below.
@@ -147,6 +147,15 @@ stop-x86_64:
 
 test-x86_64: $(ISO_OUT)
 	PYTHONOS_HOST_PORT=$(REPL_HOST_PORT) PYTHONOS_FILE_PORT=$(FILE_HOST_PORT) PYTHONOS_SMP_CPUS=$(SMP_CPUS) PYTHONOS_FREE_THREADING=$(PYTHONOS_FREE_THREADING) python3 tests/smoke_test.py $(ISO_OUT)
+
+# GUI smoke test — boots with -display none -vga std (headless GUI mode)
+# and exercises the sdl2 shim, compositor import, and serial markers.
+# `make test-gui` dispatches per host arch; for now only x86_64 is
+# wired (arm64 GUI smoke arrives with the virtio-input follow-up).
+test-gui-x86_64: $(ISO_OUT)
+	python3 tests/gui_smoke_test.py $(ISO_OUT)
+
+test-gui: test-gui-x86_64
 
 clean:
 	rm -rf build $(ISO_OUT) iso/boot/pythonos.elf \
