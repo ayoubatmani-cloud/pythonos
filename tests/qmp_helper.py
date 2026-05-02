@@ -165,3 +165,70 @@ def color_close(rgb_at: tuple[int, int, int],
     return (abs(r - er) <= tolerance
             and abs(g - eg) <= tolerance
             and abs(b - eb) <= tolerance)
+
+
+# ── Tile-hash golden helpers ────────────────────────────────────────────────
+
+import hashlib
+import os
+
+
+def tile_hashes(rgb: bytes, width: int, height: int, tile: int = 16) -> list[str]:
+    """SHA-256 hashes of every ``tile``×``tile`` block, row-major.
+
+    Each hash is a hex digest of just the raw RGB bytes belonging to that
+    tile. Tiles at the right and bottom edges that don't divide evenly
+    are clipped (their dimensions are smaller, but the hash is still
+    well-defined).
+    """
+    out: list[str] = []
+    bytes_per_row = width * 3
+    for ty in range(0, height, tile):
+        th = min(tile, height - ty)
+        for tx in range(0, width, tile):
+            tw = min(tile, width - tx)
+            h = hashlib.sha256()
+            for row in range(ty, ty + th):
+                start = row * bytes_per_row + tx * 3
+                h.update(rgb[start:start + tw * 3])
+            out.append(h.hexdigest())
+    return out
+
+
+def compare_tilehashes(actual: list[str],
+                       expected: list[str],
+                       max_diffs: int = 1) -> tuple[bool, int]:
+    """Return ``(ok, diff_count)`` allowing up to ``max_diffs`` mismatches.
+
+    A small tolerance keeps minor sub-pixel jitter from breaking the
+    test while still catching wholesale changes (cursor/window moved,
+    color theme changed, etc.).
+    """
+    if len(actual) != len(expected):
+        return False, abs(len(actual) - len(expected)) + max(len(actual), len(expected))
+    diffs = sum(1 for a, b in zip(actual, expected) if a != b)
+    return diffs <= max_diffs, diffs
+
+
+def golden_check_or_refresh(actual: list[str], golden_path: str,
+                             max_diffs: int = 1) -> tuple[bool, str]:
+    """Compare ``actual`` against the file at ``golden_path``.
+
+    With ``PYTHONOS_GOLDEN_REFRESH=1`` in the environment, write the
+    actual list to ``golden_path`` and pass. Without it, fail if the
+    file is missing.
+    """
+    if os.environ.get("PYTHONOS_GOLDEN_REFRESH", "") == "1":
+        os.makedirs(os.path.dirname(golden_path), exist_ok=True)
+        with open(golden_path, "w") as f:
+            f.write("\n".join(actual) + "\n")
+        return True, f"refreshed {len(actual)} tile hashes -> {golden_path}"
+
+    if not os.path.exists(golden_path):
+        return False, (f"golden missing: {golden_path}; "
+                        f"run with PYTHONOS_GOLDEN_REFRESH=1 to create it")
+    with open(golden_path) as f:
+        expected = [line.strip() for line in f if line.strip()]
+    ok, diffs = compare_tilehashes(actual, expected, max_diffs=max_diffs)
+    return ok, (f"{diffs} of {len(actual)} tiles differ "
+                 f"(max_diffs={max_diffs})")

@@ -20,7 +20,10 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qmp_helper import QemuMonitor, parse_ppm, sample_pixel, color_close
+from qmp_helper import (
+    QemuMonitor, parse_ppm, sample_pixel, color_close,
+    tile_hashes, golden_check_or_refresh,
+)
 
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "pythonos.iso"
@@ -128,6 +131,20 @@ def main() -> int:
             check("bouncing_ball body bg",
                   color_close(body, (0x10, 0x18, 0x20), tolerance=8),
                   detail=f"rgb={body}")
+
+            # Tile-hash golden — extra coarse check that the overall
+            # composition matches what we baselined. The bouncing_ball
+            # animation moves ~4 tiles per frame, plus boot text and
+            # cursor blink can fluctuate, so we tolerate a generous
+            # number of tile mismatches; the goal is to catch regressions
+            # like "compositor stopped painting" not pixel-perfect parity.
+            ths = tile_hashes(rgb, w, h, tile=16)
+            golden_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "goldens", "x86_64", "desktop.tilehashes")
+            ok, detail = golden_check_or_refresh(ths, golden_path,
+                                                  max_diffs=200)
+            check("tile-hash golden check (max_diffs=200)", ok, detail=detail)
 
             print(f"\n[desktop-smoke] {passes} passed, {fails} failed")
             return 0 if fails == 0 else 1
