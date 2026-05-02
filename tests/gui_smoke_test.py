@@ -237,6 +237,17 @@ def main() -> int:
                       init_xy is not None and len(init_xy) == 2,
                       detail=str(init_xy))
 
+                # Terminal app registers when apps.terminal is imported.
+                # Use __import__ instead of `import` because the kernel REPL's
+                # interactive compile() rejects bare `import X` (pre-existing
+                # frozen-Python quirk; the shell's file-execution path handles
+                # `import` fine since that goes through PyCF_ALLOW_TOP_LEVEL_AWAIT).
+                _send(s, "_t = __import__('apps.terminal', fromlist=['term'])", wait=4.0)
+                out = _send(s, "bool(__import__('apps', fromlist=['registry']).registry.get('terminal'))", wait=4.0)
+                check("apps.terminal registered",
+                      "True" in out,
+                      detail=(out.strip().splitlines()[-1] if out.strip() else "(empty)"))
+
                 if init_xy is not None:
                     mon.mouse_move(120, 0)
                     time.sleep(1.2)

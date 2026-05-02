@@ -96,6 +96,34 @@ class SDL_Surface:
                 continue
             self.pixels[do:do + n] = src.pixels[so:so + n]
 
+    # ── Text rendering (8x16 bitmap font, kernel.display.font) ─────────────
+
+    def draw_char(self, x: int, y: int, char: str,
+                  fg: int = 0xFFFFFF, bg: int | None = None) -> None:
+        from kernel.display.font import get_glyph
+        glyph = get_glyph(char)
+        for row, byte in enumerate(glyph):
+            for col in range(8):
+                px = x + col
+                py = y + row
+                if byte & (0x80 >> col):
+                    self._put(px, py, fg)
+                elif bg != None:
+                    self._put(px, py, bg)
+
+    def draw_text(self, x: int, y: int, text: str,
+                  fg: int = 0xFFFFFF, bg: int | None = None) -> tuple[int, int]:
+        from kernel.display.font import GLYPH_W, GLYPH_H
+        cx, cy = x, y
+        for ch in text:
+            if ch == '\n':
+                cy += GLYPH_H
+                cx = x
+            else:
+                self.draw_char(cx, cy, ch, fg, bg)
+                cx += GLYPH_W
+        return cx, cy
+
 
 # ── Public API ──────────────────────────────────────────────────────────────
 

@@ -354,6 +354,7 @@ async def pythonos_gui(argv: list[str], cwd: str, write) -> None:
     # Importing apps triggers each app module's registry.register() call.
     import apps                             # noqa: F401
     import apps.demos                        # noqa: F401
+    import apps.terminal                     # noqa: F401
     from apps import registry
     from kernel.gui.compositor import compositor
 
