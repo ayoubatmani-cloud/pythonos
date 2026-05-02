@@ -2,6 +2,10 @@
 
 A bare-metal operating system where CPython 3.14 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell. Runs on x86_64 and arm64 (QEMU `virt`).
 
+Boots directly to a `>>>` prompt on the serial console. An opt-in **GUI desktop** with a stacking compositor, PySDL2-compatible Python API, PNG/JPEG decoders, audio mixer, and five built-in apps (terminal, editor, file browser, image viewer, audio/graphics demos) is one make target away — see **GUI Mode** below.
+
+Run `make help` at any time for the top-level target listing.
+
 ## Quick Start
 
 ### Prerequisites
@@ -26,7 +30,7 @@ make                # rebuild kernel + ISO if sources changed
 ### Run
 
 ```bash
-# x86_64 — boots in QEMU, serial console in your terminal
+# Default boot — serial REPL, no GUI window. Picks host arch automatically.
 make run
 
 # x86_64 CPU count defaults to 2; override when needed
@@ -35,7 +39,8 @@ SMP_CPUS=4 make run
 # Experimental x86_64 CPython free-threading build
 PYTHONOS_FREE_THREADING=1 make cleanall all
 
-# arm64 — boots QEMU virt machine with PL011 serial console
+# Explicit per-arch forms when you want to be specific:
+make run-x86_64
 make run-arm64
 
 # Kill a running instance
@@ -44,6 +49,33 @@ make stop-arm64
 ```
 
 Use `Ctrl-A X` to exit QEMU.
+
+### GUI Mode
+
+Opt-in graphical desktop with a stacking compositor, mouse + keyboard input, audio output, and five built-in apps. The default `make run` and `make test` paths are unchanged — they still boot serial-only with `-nographic`.
+
+```bash
+# Boot to framebuffer REPL inside an SDL window;
+# type `pythonos_gui` at >>> to open the compositor + an app.
+make run-gui
+
+# Boot AND auto-launch the desktop in one step (host runs a small
+# launcher that sends `pythonos_gui <app>` over the TCP REPL once
+# the kernel comes up).
+make run-desktop
+PYTHONOS_DESKTOP_APP=terminal     make run-desktop
+PYTHONOS_DESKTOP_APP=editor       make run-desktop
+PYTHONOS_DESKTOP_APP=files        make run-desktop
+PYTHONOS_DESKTOP_APP=image_viewer make run-desktop
+PYTHONOS_DESKTOP_APP=audio_tone   make run-desktop
+```
+
+Inside the compositor:
+- **Tab** / **Shift-Tab** cycles focus between windows.
+- Click a window's title bar to drag it; click in the body to focus + raise.
+- **ESC** typically closes the focused app and returns to the REPL.
+
+See **`docs/gui.md`** for the full feature reference (compositor, sdl2 API surface, image decoders, audio backends, apps).
 
 The no-GIL build is currently supported on x86_64 QEMU with SMP enabled. It
 boots CPython with `PY_GIL_DISABLED=1`, starts AP-backed pthread workers through
@@ -259,10 +291,18 @@ The `>>>` prompt is also available on the serial console (the QEMU terminal wind
 ### Run the smoke tests
 
 ```bash
-make test
+make test           # default boot smoke (serial + TCP REPL based)
+make test-gui       # GUI subsystem smoke (headless screendump + audio capture)
 ```
 
-This boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass. The x86_64 smoke test boots with two virtual CPUs by default; use `SMP_CPUS=4 make test` to expose more.
+`make test` boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass. The x86_64 smoke test boots with two virtual CPUs by default; use `SMP_CPUS=4 make test` to expose more.
+
+`make test-gui` runs three additional suites on x86_64 (or one on arm64):
+- **gui smoke** — sdl2 corpus (`hello`/`renderer`/`text`/`image`/`jpeg`), compositor render, mouse pipeline, pointer round-trip, serial markers
+- **desktop smoke** — boots, auto-launches `pythonos_gui bouncing_ball`, screendumps, asserts pixel-exact desktop bg + title bar + window body + tile-hash golden
+- **audio smoke** — boots with `-audiodev wav,id=a`, runs `examples/tone.py`, verifies the captured WAV header (48 kHz / 2ch / 16-bit)
+
+Counts at HEAD: 41 / 28 / 23 / 5 / 6 / 8 across the six suites (default x86, default arm64, x86 gui, x86 desktop, x86 audio, arm64 gui) — **111 tests** total.
 
 For the no-GIL path, run `PYTHONOS_FREE_THREADING=1 SMP_CPUS=4 make test`.
 That smoke covers the boot-time SMP self-tests, `_hal.pthread_selftest()`, and
@@ -325,11 +365,13 @@ U-Boot / QEMU direct kernel load
 [PythonOS] INFO  kernel.boot: 7 PCI devices found
 [PythonOS] INFO  kernel.boot: tmpfs mounted at /
 [PythonOS] INFO  kernel.boot: event loop ready
-[PythonOS] INFO  kernel: no framebuffer — serial only
+[PythonOS] INFO  kernel: no framebuffer — serial only       # default boot
 [PythonOS] INFO  kernel: COM1 serial input ready
 [PythonOS] INFO  virtio-net: MAC 52:54:00:12:34:56
 [PythonOS] INFO  kernel: network stack starting
 [PythonOS] INFO  repl: TCP REPL listening on port 5000 — connect: nc localhost 5555
+[PythonOS] INFO  kernel: HDA sound ready
+[PythonOS] INFO  mixer: attached backend HDADriver
 [PythonOS] INFO  kernel: shell spawned — system ready
 
 PythonOS kernel shell
@@ -337,6 +379,24 @@ Python 3.14.0
 Type 'help' for kernel commands.
 
 >>>
+```
+
+In `make run-gui` mode the framebuffer + GUI input substrate also come up:
+
+```
+[PythonOS] boot: framebuffer found
+[PythonOS] INFO  kernel: framebuffer console ready
+[PythonOS] INFO  kernel: GUI input ready (PS/2 kbd+mouse)
+```
+
+On arm64 with `make run-gui-arm64` the equivalent markers are:
+
+```
+[PythonOS] INFO  ramfb: 1024x768x32 ready
+[PythonOS] INFO  virtio-input: ready at 0xa003e00
+[PythonOS] INFO  kernel: GUI input ready (virtio-input x2)
+[PythonOS] INFO  virtio-snd: ready at 0xa003a00 (stream 0, 48000 Hz / 2ch / S16)
+[PythonOS] INFO  kernel: virtio-snd ready
 ```
 
 ### Source Layout
@@ -360,11 +420,28 @@ kernel/
     input/
       com1.py        COM1 16550A serial input (x86_64 headless)
       pl011.py       PL011 UART input (arm64 virt)
+      virtio_input.py virtio-input keyboard + mouse + tablet over MMIO (arm64)
+    keyboard.py      PS/2 keyboard (x86; IRQ1, scancode set 1)
+    mouse.py         PS/2 mouse (x86; IRQ12, 3-byte packet)
     net/
       virtio_net.py  VirtIO-net driver (DMA descriptor rings)
     block/
       virtio_blk.py  VirtIO-MMIO block driver (arm64)
-  sound/hda.py       Intel HDA driver (BDL DMA, codec configuration)
+    display/
+      bochs.py       bochs-display PCI driver (x86 GUI)
+      ramfb.py       arm64 ramfb via fw_cfg
+      fwcfg.py       fw_cfg helper
+    sound/
+      virtio_snd.py  arm64 virtio-snd backend
+  sound/
+    hda.py           Intel HDA driver (BDL DMA, codec configuration)
+    mixer.py         arch-neutral PCM playback API (Mixer)
+  gui/                 GUI subsystem — opt-in, only active under run-gui / run-desktop
+    input.py         canonical Event + EventQueue; PS/2 + virtio-input bridges
+    compositor.py    stacking window manager (Tab focus, drag, click-to-focus)
+    sdl2/            PySDL2-compatible Python API (Init, Window, Surface, Renderer,
+                     events, sdlmixer, sdlttf — see docs/gui.md)
+    image/           image decoders: bmp, ppm, png (with pure-Python deflate), jpeg
   net/
     ethernet.py      Ethernet frame encode/decode
     arp.py           ARP request/reply
@@ -377,24 +454,43 @@ kernel/
   scheduler.py       asyncio task scheduler (ps, spawn)
   shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
 
+apps/                  built-in GUI applications (frozen, registered via apps.registry)
+  terminal/          Python REPL inside a CompositorWindow
+  editor/            ed line editor in a window
+  files/             arrow-key file browser
+  image_viewer/      BMP / PPM / PNG / JPEG viewer
+  demos/             bouncing_ball (graphics), audio_tone (440 Hz)
+  _textwin.py        shared text-grid view used by terminal + editor
+
 bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
   ls.py, ps.py, pwd.py, cd.py, cat.py, cp.py, mv.py, ftp.py, ed.py — filesystem / transfer utilities
   sysinfo.py, netstat.py                                  — system / network status
+  pythonos_gui.py                                          — desktop launcher
 
 examples/          frozen runnable demos, also seeded as readable source in /examples
   hello_kernel.py, vfs_demo.py, async_tasks.py, primes.py, tone.py,
   recv_file.py, send_file.py
+  fb_test.py, sdl_hello.py, sdl_renderer.py, sdl_text.py,
+  sdl_image.py (PNG corpus), sdl_jpeg.py (JPEG corpus)
 
 asyncio/             bare-metal asyncio (no socket/selectors): Future, Task,
                      Queue, Event, Lock, Semaphore, sleep, wait_for, gather
 
 tests/
-  smoke_test.py      boots QEMU, connects to TCP REPL, verifies kernel commands
+  smoke_test.py            x86 default smoke (TCP REPL based)
+  smoke_test_arm64.py      arm64 default smoke (PL011 serial)
+  gui_smoke_test.py        x86 GUI smoke (sdl2 corpus + compositor + pixel checks)
+  gui_smoke_test_arm64.py  arm64 GUI smoke (ramfb + virtio-input + screendump)
+  desktop_smoke_test.py    end-to-end pythonos_gui auto-launch + tile-hash golden
+  audio_smoke_test.py      WAV-capture audio pipeline check
+  qmp_helper.py            QEMU monitor wrapper (screendump, sendkey, mouse_*)
+  goldens/x86_64/          checked-in tile-hash goldens (refresh: PYTHONOS_GOLDEN_REFRESH=1)
 
 tools/
-  freeze_kernel.py   compiles kernel/*.py → frozen C bytecode in the ELF
+  freeze_kernel.py   compiles kernel + apps + examples → frozen C bytecode in the ELF
+  run_desktop.py     boots QEMU then auto-sends `pythonos_gui` to the TCP REPL
   stdlib_stubs/      bare-metal replacements for stdlib modules that assume
-                     a POSIX host (dataclasses, functools, os, ctypes, …)
+                     a POSIX host (dataclasses, functools, os, ctypes, sdl2, …)
   Dockerfile         Ubuntu 24.04 cross-compilation environment
   setup_cpython.sh   fetch, patch, and configure CPython 3.14 for bare metal
 

@@ -106,11 +106,70 @@ QEMU_GUI_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SM
 
 # ── User-facing targets ───────────────────────────────────────────────────────
 
-.PHONY: all build run start stop restart test clean cleanall docker-build \
+.PHONY: all build run start stop restart test clean cleanall docker-build help \
         _freeze _iso _libpython \
         x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 run-desktop-x86_64 \
         arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 _iso_arm64 \
         run-gui test-gui run-desktop
+
+
+# ── Help ─────────────────────────────────────────────────────────────────────
+# Show the user-facing top-level targets and the env vars that tweak them.
+# Per-arch explicit forms (run-x86_64, run-arm64, etc.) are described in
+# the explicit per-arch sections further down — the defaults dispatch to
+# the host arch automatically.
+
+help:
+	@echo "PythonOS — top-level make targets"
+	@echo ""
+	@echo "Build:"
+	@echo "  make                      Build for the host arch (default: $(HOST_ARCH))"
+	@echo "  make TARGET_ARCH=x86_64   Cross-build for x86_64"
+	@echo "  make TARGET_ARCH=arm64    Cross-build for arm64"
+	@echo "  make docker-build         Rebuild the Docker cross-toolchain image"
+	@echo "  make clean                Remove build artifacts (keeps libpython cache)"
+	@echo "  make cleanall             Remove everything including libpython"
+	@echo ""
+	@echo "Run (serial REPL — boot directly to >>>, no GUI):"
+	@echo "  make run                  Boot in QEMU on serial (default behavior)"
+	@echo "  make stop                 Kill the running QEMU instance"
+	@echo "  make restart              stop + run"
+	@echo ""
+	@echo "Run (GUI desktop — opens an SDL window):"
+	@echo "  make run-gui              Boot with SDL window + framebuffer REPL;"
+	@echo "                            type 'pythonos_gui' at >>> to open the desktop"
+	@echo "  make run-desktop          Boot AND auto-launch pythonos_gui — opens"
+	@echo "                            directly to the compositor + an app"
+	@echo ""
+	@echo "Test:"
+	@echo "  make test                 Boot in QEMU, run TCP-REPL smoke tests"
+	@echo "                            (x86: 41 tests, arm64: 28 tests)"
+	@echo "  make test-gui             Run headless GUI smoke tests"
+	@echo "                            (x86: 23+5+6 tests; arm64: 8 tests)"
+	@echo ""
+	@echo "Per-arch explicit forms (run-x86_64, run-arm64, run-gui-x86_64, etc.)"
+	@echo "exist for every dispatched target above — useful when both archs are"
+	@echo "built side-by-side."
+	@echo ""
+	@echo "Environment variables:"
+	@echo "  TARGET_ARCH={x86_64,arm64}     which arch the dispatch targets build/run"
+	@echo "                                 (default: host = $(HOST_ARCH))"
+	@echo "  SMP_CPUS=<n>                   number of x86_64 vCPUs (default: 2)"
+	@echo "  ARM64_SMP_CPUS=<n>             number of arm64 vCPUs (default: 2)"
+	@echo "  PYTHONOS_FREE_THREADING={0,1}  build CPython with --disable-gil (x86 default 1)"
+	@echo "  PYTHONOS_DESKTOP_APP=<name>    which app run-desktop auto-launches"
+	@echo "                                 (bouncing_ball | terminal | editor | files |"
+	@echo "                                  image_viewer | audio_tone)"
+	@echo "  PYTHONOS_GOLDEN_REFRESH=1      regenerate test screendump goldens"
+	@echo ""
+	@echo "TCP REPL access (host → guest forwarded ports):"
+	@echo "  nc localhost 5555              x86_64 default + GUI"
+	@echo "  nc localhost 5556              arm64"
+	@echo ""
+	@echo "More:"
+	@echo "  README.md             quickstart, shell + Python REPL surface"
+	@echo "  docs/gui.md           GUI subsystem (compositor, apps, sdl2, decoders)"
+	@echo "  bd ready              open development tasks"
 
 # Top-level dispatch. These pick x86_64 or arm64 based on TARGET_ARCH (which
 # defaults to the host arch). Explicit per-arch targets are listed below.
