@@ -106,7 +106,7 @@ QEMU_GUI_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SM
 
 # ── User-facing targets ───────────────────────────────────────────────────────
 
-.PHONY: all run start stop restart test clean cleanall docker-build \
+.PHONY: all build run start stop restart test clean cleanall docker-build \
         _freeze _iso _libpython \
         x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 run-desktop-x86_64 \
         arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 _iso_arm64 \
@@ -130,6 +130,7 @@ run-gui:     run-gui-x86_64
 run-desktop: run-desktop-x86_64
 endif
 
+build:   all
 start:   run
 restart: stop start
 
@@ -443,7 +444,7 @@ $(ARM64_ELF): $(LIBPYTHON_ARM64) \
               $(BOOT_SRC) $(HAL_SRC) $(LIBC_SRC) $(KERNEL_DEPS) \
               linker_arm64.ld .docker-image
 	docker run --rm --platform linux/amd64 -v $(PWD):/work -w /work $(DOCKER_IMG) \
-	  bash -c "make -f GNUMakefile _freeze && make -f GNUMakefile _iso_arm64"
+	  bash -c "make -f GNUMakefile CPYTHON_LIB=deps-arm64/cpython-src/Lib ENCODINGS_SRC=deps-arm64/cpython-src/Lib/encodings _freeze && make -f GNUMakefile _iso_arm64"
 	@echo "ARM64 ELF ready: $(ARM64_ELF)"
 
 # Internal: build arm64 ELF (called from inside Docker)
