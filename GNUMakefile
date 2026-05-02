@@ -165,6 +165,7 @@ test-x86_64: $(ISO_OUT)
 test-gui-x86_64: $(ISO_OUT)
 	python3 tests/gui_smoke_test.py $(ISO_OUT)
 	python3 tests/desktop_smoke_test.py $(ISO_OUT)
+	python3 tests/audio_smoke_test.py $(ISO_OUT)
 
 test-gui-arm64: $(ARM64_ELF) $(ARM64_DISK)
 	python3 tests/gui_smoke_test_arm64.py $(ARM64_ELF)
@@ -397,7 +398,7 @@ QEMU_ARM64_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2G -s
 QEMU_ARM64_GUI_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2G -smp $(ARM64_SMP_CPUS) \
                     -no-reboot -no-shutdown \
                     -display sdl -device ramfb -serial stdio \
-                    -device virtio-keyboard-device \
+                    -device virtio-keyboard-device -device virtio-tablet-device \
                     -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img

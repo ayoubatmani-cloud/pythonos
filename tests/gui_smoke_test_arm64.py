@@ -94,7 +94,7 @@ def main() -> int:
         check("virtio-input device ready",
               _wait_marker(LOG, "virtio-input: ready at", deadline))
         check("GUI input bridge installed",
-              _wait_marker(LOG, "GUI input ready (virtio-input)", deadline))
+              _wait_marker(LOG, "GUI input ready (virtio-input", deadline))
         check("framebuffer console rendered",
               _wait_marker(LOG, "framebuffer console ready", deadline))
 

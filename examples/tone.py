@@ -32,7 +32,9 @@ async def main(argv=None, cwd="/", read_char=None, write=None):
         _line(write, "No HDA device is available on this machine.")
         return
 
-    pcm = _square_tone()
+    pcm = _square_tone(freq=440, ms=500)
     _line(write, "Generated PythonOS tone buffer for Intel HDA.")
     _line(write, str(len(pcm)) + " PCM bytes ready")
+    consumed = hda.write_pcm(pcm)
+    _line(write, "wrote " + str(consumed) + " bytes to HDA")
     _line(write, "done")

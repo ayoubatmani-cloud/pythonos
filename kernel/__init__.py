@@ -141,8 +141,10 @@ async def _kernel_main(
                 log.info("kernel: GUI input ready (PS/2 kbd+mouse)")
             else:
                 from kernel.drivers.input import virtio_input
-                if virtio_input.install_virtio_input_bridge(scheduler):
-                    log.info("kernel: GUI input ready (virtio-input)")
+                n = virtio_input.install_virtio_input_bridge(
+                    scheduler, screen_w=fb.width, screen_h=fb.height)
+                if n:
+                    log.info(f"kernel: GUI input ready (virtio-input x{n})")
                 else:
                     log.info("kernel: no virtio-input device found")
         except Exception as e:

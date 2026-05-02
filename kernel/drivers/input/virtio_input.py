@@ -59,6 +59,10 @@ def _w32(base, off, v): _hal.mmio_write32(base + off, v)
 def _w8 (addr, v): _hal.mmio_write8(addr, v)
 
 
+def _signed32(v: int) -> int:
+    return v - 0x100000000 if (v & 0x80000000) else v
+
+
 # ── Linux EV_KEY → KEY_* mapping ────────────────────────────────────────────
 # Subset covering printable ASCII, common modifiers, and arrows. Anything
 # outside this table is silently dropped (with a debug log on first sight).
@@ -120,11 +124,31 @@ _EV_RCTRL  = 97
 _EV_LALT   = 56
 _EV_RALT   = 100
 
+# Linux input.h mouse-button codes (under EV_KEY)
+_BTN_LEFT   = 0x110
+_BTN_RIGHT  = 0x111
+_BTN_MIDDLE = 0x112
+_BTN_MOUSE_BUTTONS = (_BTN_LEFT, _BTN_RIGHT, _BTN_MIDDLE)
+_BTN_TO_INDEX = {_BTN_LEFT: 1, _BTN_MIDDLE: 2, _BTN_RIGHT: 3}
+
+# EV_REL axis codes
+_REL_X = 0
+_REL_Y = 1
+
+# EV_ABS axis codes
+_ABS_X = 0
+_ABS_Y = 1
+
+# QEMU virtio-tablet uses absolute coords in [0, 32767]; we scale into
+# screen pixels at SYN time. The default screen size is set by the
+# install bridge.
+_TABLET_RANGE = 32768
+
 
 class VirtioMmioInput:
     """Single virtio-input keyboard device."""
 
-    def __init__(self, base: int) -> None:
+    def __init__(self, base: int, screen_w: int = 1024, screen_h: int = 768) -> None:
         self._base = base
         self._version = 0
         self._desc_phys  = 0
@@ -134,9 +158,20 @@ class VirtioMmioInput:
         self._next_desc  = 0
         self._avail_idx  = 0
         self._last_used  = 0
+        # Modifier state
         self._shift = False
         self._ctrl  = False
         self._alt   = False
+        # Pointer-batching state — accumulate EV_REL deltas / EV_ABS coords
+        # between EV_SYN reports.
+        self._screen_w = screen_w
+        self._screen_h = screen_h
+        self._ptr_x = screen_w // 2
+        self._ptr_y = screen_h // 2
+        self._abs_x = None
+        self._abs_y = None
+        self._rel_dx = 0
+        self._rel_dy = 0
 
     # ── Probe ───────────────────────────────────────────────────────────
 
@@ -257,10 +292,41 @@ class VirtioMmioInput:
         return type_, code, value
 
     def _emit(self, type_, code, value):
+        # Pointer paths first.
+        if type_ == EV_REL:
+            if code == _REL_X:
+                self._rel_dx += _signed32(value)
+            elif code == _REL_Y:
+                self._rel_dy += _signed32(value)
+            return
+
+        if type_ == EV_ABS:
+            if code == _ABS_X:
+                self._abs_x = value
+            elif code == _ABS_Y:
+                self._abs_y = value
+            return
+
+        if type_ == EV_SYN:
+            self._flush_pointer()
+            return
+
         if type_ != EV_KEY:
             return
-        # Track modifiers
+
         is_press = (value != 0)
+
+        # Mouse buttons — distinct from keysyms.
+        if code in _BTN_MOUSE_BUTTONS:
+            if _gui_input.queue == None:
+                return
+            kind = _gui_input.MOUSE_DOWN if is_press else _gui_input.MOUSE_UP
+            _gui_input.queue.post(
+                _gui_input.Event(kind=kind, code=_BTN_TO_INDEX[code],
+                                  x=self._ptr_x, y=self._ptr_y))
+            return
+
+        # Modifier-key tracking
         if code in (_EV_LSHIFT, _EV_RSHIFT):
             self._shift = is_press
             self._post_modifier(code, is_press)
@@ -294,6 +360,44 @@ class VirtioMmioInput:
         if _gui_input.queue != None:
             _gui_input.queue.post(ev)
 
+    def _flush_pointer(self):
+        """On EV_SYN, materialize accumulated EV_REL / EV_ABS into a single
+        MOUSE_MOVE event with the resolved screen coordinate."""
+        if _gui_input.queue == None:
+            return
+        moved = False
+        dx = dy = 0
+
+        if self._abs_x != None or self._abs_y != None:
+            new_x = self._ptr_x
+            new_y = self._ptr_y
+            if self._abs_x != None:
+                new_x = (self._abs_x * (self._screen_w - 1)) // (_TABLET_RANGE - 1)
+            if self._abs_y != None:
+                new_y = (self._abs_y * (self._screen_h - 1)) // (_TABLET_RANGE - 1)
+            dx = new_x - self._ptr_x
+            dy = new_y - self._ptr_y
+            self._ptr_x = max(0, min(self._screen_w - 1, new_x))
+            self._ptr_y = max(0, min(self._screen_h - 1, new_y))
+            self._abs_x = None
+            self._abs_y = None
+            moved = (dx != 0 or dy != 0)
+
+        if self._rel_dx != 0 or self._rel_dy != 0:
+            dx += self._rel_dx
+            dy += self._rel_dy
+            self._ptr_x = max(0, min(self._screen_w - 1, self._ptr_x + self._rel_dx))
+            self._ptr_y = max(0, min(self._screen_h - 1, self._ptr_y + self._rel_dy))
+            self._rel_dx = 0
+            self._rel_dy = 0
+            moved = True
+
+        if moved:
+            _gui_input.queue.post(
+                _gui_input.Event(kind=_gui_input.MOUSE_MOVE,
+                                  x=self._ptr_x, y=self._ptr_y,
+                                  dx=dx, dy=dy))
+
     def _post_modifier(self, code, is_press):
         keycode = _EV_TO_KEY.get(code, _gui_input.KEY_NONE)
         if keycode == _gui_input.KEY_NONE:
@@ -326,21 +430,38 @@ class VirtioMmioInput:
 
 # ── Public discovery + setup ─────────────────────────────────────────────
 
-def find_virtio_input() -> "VirtioMmioInput | None":
+def find_all_virtio_input(screen_w: int = 1024, screen_h: int = 768) -> list:
+    """Scan every virtio-mmio slot and return all virtio-input devices
+    (keyboard / mouse / tablet may all be present simultaneously)."""
+    devs: list = []
     for i in range(VIRTIO_MMIO_DEVS):
         base = VIRTIO_MMIO_BASE + i * VIRTIO_MMIO_STRIDE
-        dev = VirtioMmioInput(base)
+        # Quick magic + DeviceID check before allocating queue memory.
+        if _r32(base, 0x000) != VIRTIO_MAGIC:
+            continue
+        if _r32(base, 0x008) != VIRTIO_DEV_INPUT:
+            continue
+        dev = VirtioMmioInput(base, screen_w=screen_w, screen_h=screen_h)
         if dev.probe():
-            return dev
-    return None
+            devs.append(dev)
+    return devs
 
 
-def install_virtio_input_bridge(scheduler) -> bool:
-    """Bind the first virtio-input device, if present, and spawn its
-    polling task on ``scheduler``. Returns True on success."""
-    dev = find_virtio_input()
-    if dev == None:
-        return False
+# Back-compat alias — older callers that just want the first device.
+def find_virtio_input() -> "VirtioMmioInput | None":
+    devs = find_all_virtio_input()
+    return devs[0] if devs else None
+
+
+def install_virtio_input_bridge(scheduler,
+                                 screen_w: int = 1024,
+                                 screen_h: int = 768) -> int:
+    """Bind every virtio-input device and spawn one polling task per
+    device on ``scheduler``. Returns the count of devices wired."""
+    devs = find_all_virtio_input(screen_w=screen_w, screen_h=screen_h)
+    if not devs:
+        return 0
     _gui_input.init()
-    scheduler.spawn(dev.run(), name="virtio-input-poller")
-    return True
+    for i, dev in enumerate(devs):
+        scheduler.spawn(dev.run(), name=f"virtio-input-poller-{i}")
+    return len(devs)
