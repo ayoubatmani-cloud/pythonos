@@ -258,6 +258,12 @@ def main() -> int:
                       "True" in out,
                       detail=(out.strip().splitlines()[-1] if out.strip() else "(empty)"))
 
+                _send(s, "_e = __import__('apps.editor', fromlist=['edwin'])", wait=4.0)
+                out = _send(s, "bool(__import__('apps', fromlist=['registry']).registry.get('editor'))", wait=4.0)
+                check("apps.editor registered",
+                      "True" in out,
+                      detail=(out.strip().splitlines()[-1] if out.strip() else "(empty)"))
+
                 if init_xy is not None:
                     mon.mouse_move(120, 0)
                     time.sleep(1.2)

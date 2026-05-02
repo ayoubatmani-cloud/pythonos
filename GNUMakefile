@@ -206,7 +206,8 @@ KERNEL_PY  := $(wildcard \
                    kernel/sound/*.py \
                    apps/*.py \
                    apps/demos/*.py \
-                   apps/terminal/*.py)
+                   apps/terminal/*.py \
+                   apps/editor/*.py)
 ASYNCIO_PY := $(wildcard asyncio/*.py)
 STUBS_PY   := $(wildcard tools/stdlib_stubs/*.py tools/stdlib_stubs/ctypes/*.py)
 EXAMPLES_SRC := $(wildcard examples/*.py examples/*.txt)
