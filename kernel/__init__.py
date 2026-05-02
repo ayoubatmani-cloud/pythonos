@@ -111,6 +111,16 @@ async def _kernel_main(
     _fb_mod      = _sys.modules['kernel.display.framebuffer']
     _console_mod = _sys.modules['kernel.display.console']
 
+    # On arm64 the firmware doesn't negotiate a framebuffer; if QEMU was
+    # started with `-device ramfb` we set one up ourselves via fw_cfg.
+    if fb_info is None and _ARCH == 'arm64':
+        try:
+            from kernel.drivers.display import ramfb
+            fb_info = ramfb.setup()
+        except Exception as e:
+            log.info(f"kernel: ramfb setup failed: {e}")
+            fb_info = None
+
     if fb_info:
         fb = display.Framebuffer(fb_info)
         _fb_mod.fb = fb
