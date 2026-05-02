@@ -92,7 +92,7 @@ class Mixer:
         ``rate`` is informational for now — the backend runs at its own
         native rate. Caller is responsible for resampling.
         """
-        if self._backend is None:
+        if self._backend == None:
             return 0
         if rate not in (None, self._rate):
             log.info(f"mixer: ignoring rate={rate}; native is {self._rate}")

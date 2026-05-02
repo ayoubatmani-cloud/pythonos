@@ -210,10 +210,10 @@ def SDL_PollEvent(event: SDL_Event) -> int:
     """Drain at most one event from the queue. Returns 1 if an event was
     written into ``event``, 0 otherwise."""
     q = _gui_input.queue
-    if q is None or q.empty():
+    if q == None or q.empty():
         return 0
     ev = q.poll()
-    if ev is None:
+    if ev == None:
         return 0
     _populate(event, ev)
     return 1
@@ -221,7 +221,7 @@ def SDL_PollEvent(event: SDL_Event) -> int:
 
 async def SDL_WaitEvent(event: SDL_Event) -> int:
     q = _gui_input.queue
-    if q is None:
+    if q == None:
         _gui_input.init()
         q = _gui_input.queue
     ev = await q.get()

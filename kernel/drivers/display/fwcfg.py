@@ -99,7 +99,7 @@ def _dma_write(selector: int, data: bytes) -> bool:
 def signature() -> bytes:
     """Reads the 4-byte signature item; returns b'QEMU' if fw_cfg is present."""
     sig = _dma_read(FW_CFG_SIGNATURE, 4)
-    return sig if sig is not None else b""
+    return sig if sig != None else b""
 
 
 def list_files() -> dict[str, tuple[int, int]]:

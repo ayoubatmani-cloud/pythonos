@@ -138,7 +138,7 @@ queue: EventQueue | None = None
 def init() -> EventQueue:
     """Idempotent setup; safe to call multiple times."""
     global queue
-    if queue is None:
+    if queue == None:
         queue = EventQueue()
     return queue
 

@@ -143,7 +143,7 @@ class Compositor:
 
     def _redraw(self) -> None:
         fb = _fb_mod.fb
-        if fb is None:
+        if fb == None:
             return
         any_dirty = any(w.dirty for w in self._windows)
         if not any_dirty:
@@ -167,7 +167,7 @@ class Compositor:
             return
         # Everything else goes to the focused window
         win = self.focused_window
-        if win is not None:
+        if win != None:
             win.deliver(ev)
 
     # ── Tasks ───────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ class Compositor:
 
     async def _input_loop(self) -> None:
         q = _gui_input.queue
-        if q is None:
+        if q == None:
             _gui_input.init()
             q = _gui_input.queue
         while self._running:

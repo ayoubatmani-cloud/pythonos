@@ -48,7 +48,7 @@ def setup(width: int = 1024, height: int = 768) -> dict | None:
 
     files = fwcfg.list_files()
     entry = files.get("etc/ramfb")
-    if entry is None:
+    if entry == None:
         log.info("ramfb: etc/ramfb not present (start QEMU with `-device ramfb`)")
         return None
     _size, selector = entry

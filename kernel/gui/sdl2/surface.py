@@ -110,14 +110,14 @@ def SDL_MapRGBA(fmt, r: int, g: int, b: int, a: int) -> int:
 
 
 def SDL_FillRect(surface, rect, color: int) -> int:
-    """Fill ``rect`` (or whole surface if rect is None) with ``color``."""
+    """Fill ``rect`` (or whole surface if rect == None) with ``color``."""
     if isinstance(surface, SDL_Surface):
         s = surface
     elif hasattr(surface, "contents"):
         s = surface.contents
     else:
         s = surface
-    if rect is None:
+    if rect == None:
         s._fill_rect(0, 0, s.w, s.h, color)
     else:
         r = rect.contents if hasattr(rect, "contents") else rect
@@ -128,8 +128,8 @@ def SDL_FillRect(surface, rect, color: int) -> int:
 def SDL_BlitSurface(src, src_rect, dst, dst_rect) -> int:
     s_src = src.contents if hasattr(src, "contents") else src
     s_dst = dst.contents if hasattr(dst, "contents") else dst
-    dx = dst_rect.x if dst_rect is not None else 0
-    dy = dst_rect.y if dst_rect is not None else 0
+    dx = dst_rect.x if dst_rect != None else 0
+    dy = dst_rect.y if dst_rect != None else 0
     s_dst._blit(s_src, dx, dy)
     return 0
 

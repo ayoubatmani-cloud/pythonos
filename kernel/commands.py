@@ -55,6 +55,10 @@ SCRIPTS = {
         "from kernel import commands\n"
         "await commands.ed(argv, cwd, _write)\n"
     ),
+    "pythonos_gui.py": (
+        "from kernel import commands\n"
+        "await commands.pythonos_gui(argv, cwd, _write)\n"
+    ),
 }
 
 
@@ -330,3 +334,49 @@ async def ed(argv: list[str], cwd: str, write, read_char=None) -> None:
     from kernel.ed import run as _ed_run
 
     await _ed_run(argv, cwd, write, read_char)
+
+
+async def pythonos_gui(argv: list[str], cwd: str, write) -> None:
+    """Start the GUI desktop. Refuses to run without a framebuffer +
+    GUI input bound. Lists registered apps; ``pythonos_gui <name>``
+    launches one directly. With no argument, launches the first app
+    (or a banner if there are none)."""
+    from kernel.display.framebuffer import fb
+    if not fb:
+        _line(write, "pythonos_gui: no framebuffer (boot in GUI mode: make run-gui)")
+        return
+
+    from kernel.gui import input as _gui_input
+    if not _gui_input.queue:
+        _line(write, "pythonos_gui: no GUI input bound")
+        return
+
+    # Importing apps triggers each app module's registry.register() call.
+    import apps                             # noqa: F401
+    import apps.demos                        # noqa: F401
+    from apps import registry
+    from kernel.gui.compositor import compositor
+
+    apps_list = registry.list_apps()
+    if not apps_list:
+        _line(write, "pythonos_gui: no apps registered")
+        return
+
+    requested = argv[0] if argv else None
+    if requested:
+        info = registry.get(requested)
+        if info is None:
+            _line(write, "pythonos_gui: unknown app: " + requested)
+            _line(write, "available: " + ", ".join(a.name for a in apps_list))
+            return
+        target = info
+    else:
+        target = apps_list[0]
+
+    _line(write, f"pythonos_gui: starting compositor + {target.name}")
+    compositor.start()
+    try:
+        await target.entry()
+    except Exception as e:
+        _line(write, f"pythonos_gui: {target.name} crashed: {e}")
+    _line(write, "pythonos_gui: app exited; back at REPL")

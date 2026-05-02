@@ -53,7 +53,7 @@ def SDL_UpdateWindowSurface(window) -> int:
     """Blit the window's off-screen surface to the live framebuffer."""
     w = window.contents if hasattr(window, "contents") else window
     from kernel.display.framebuffer import fb
-    if fb is None:
+    if fb == None:
         return -1
     s = w._surface
     # Centre the window on the framebuffer if it fits, else clip to top-left.
