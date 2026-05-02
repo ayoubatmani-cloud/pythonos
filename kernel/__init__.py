@@ -129,6 +129,17 @@ async def _kernel_main(
         console.writeln("PythonOS")
         console.writeln(f"RAM: {pmm.free_pages * 4096 // 1024 // 1024} MiB free")
         log.info("kernel: framebuffer console ready")
+        # Bring the GUI input substrate up alongside the framebuffer.
+        # On x86 this hooks the PS/2 keyboard IRQ; arm64 virtio-input is
+        # tracked separately and does nothing here yet.
+        try:
+            from kernel.gui import input as _gui_input
+            _gui_input.init()
+            if _ARCH == 'x86_64':
+                _gui_input.install_ps2_bridge()
+                log.info("kernel: GUI input ready (PS/2)")
+        except Exception as e:
+            log.info(f"kernel: GUI input setup failed: {e}")
     else:
         console = None
         log.info("kernel: no framebuffer — serial only")

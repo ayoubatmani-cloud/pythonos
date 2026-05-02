@@ -63,7 +63,5 @@ def _timer(ctx: InterruptContext) -> None:
     scheduler.tick(ctx)
 
 
-@interrupt(IRQ.KEYBOARD)
-async def _keyboard(ctx: InterruptContext) -> None:
-    from kernel.drivers.keyboard import keyboard
-    await keyboard.handle_irq()
+# IRQ.KEYBOARD is registered by the PS/2 driver itself in
+# kernel.drivers.keyboard — don't shadow it from here.

@@ -73,6 +73,13 @@ class KeyboardDriver:
         self._ctrl      = False
         self._alt       = False
         self._capslock  = False
+        # Synchronous callbacks invoked from the IRQ context for every key
+        # event (press AND release). Used by the GUI input bridge.
+        self._subscribers: list = []
+
+    def subscribe(self, callback) -> None:
+        """Register a sync callback fn(KeyEvent) called from IRQ context."""
+        self._subscribers.append(callback)
 
     def _unmask_irq1(self) -> None:
         from kernel.hal.io import inb, outb
@@ -124,21 +131,26 @@ class KeyboardDriver:
             alt=self._alt,
         )
 
-        if not released:
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass   # drop on overflow — keyboard buffer full
+        for cb in self._subscribers:
             try:
-                self._queue.put_nowait(event)
-            except asyncio.QueueFull:
-                pass   # drop on overflow — keyboard buffer full
+                cb(event)
+            except Exception:
+                pass
 
     async def read(self) -> KeyEvent:
         """Async read — suspends until a key is pressed."""
         return await self._queue.get()
 
     async def read_char(self) -> str:
-        """Read next printable character, skipping non-printable keys."""
+        """Read next printable character, skipping non-printable keys
+        and key-release events (the queue now carries both)."""
         while True:
             ev = await self.read()
-            if ev.char:
+            if ev.pressed and ev.char:
                 return ev.char
 
 

@@ -187,6 +187,9 @@ KERNEL_PY  := $(wildcard \
                    kernel/drivers/input/*.py \
                    kernel/drivers/net/*.py \
                    kernel/fs/*.py \
+                   kernel/gui/*.py \
+                   kernel/gui/sdl2/*.py \
+                   kernel/gui/image/*.py \
                    kernel/hal/*.py \
                    kernel/interrupts/*.py \
                    kernel/memory/*.py \
