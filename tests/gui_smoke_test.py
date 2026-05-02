@@ -264,6 +264,46 @@ def main() -> int:
                       "True" in out,
                       detail=(out.strip().splitlines()[-1] if out.strip() else "(empty)"))
 
+                _send(s, "_iv = __import__('apps.image_viewer', fromlist=['viewer'])", wait=3.0)
+                _send(s, "_fb_ = __import__('apps.files', fromlist=['browser'])", wait=3.0)
+                _send(s, "_at = __import__('apps.demos.audio_tone', fromlist=['main'])", wait=3.0)
+                _send(s, "_r = __import__('apps', fromlist=['registry']).registry", wait=2.0)
+                out = _send(s, "len(_r.list_apps())", wait=2.5)
+                check("apps registry populated (>=6 apps)",
+                      any(t in out for t in ("6", "7", "8", "9")),
+                      detail=(out.strip().splitlines()[-1] if out.strip() else "(empty)"))
+
+                # Render a compositor desktop window and verify pixel-by-pixel
+                # that the title bar shows up at the expected screen location.
+                # CHROME_FOCUS_BG = 0x224488 → (R=0x22, G=0x44, B=0x88) =
+                # (34, 68, 136) in PPM ordering.
+                _send(s, "_c = __import__('kernel.gui.compositor', fromlist=['compositor','CompositorWindow'])", wait=2.0)
+                _send(s, "_w = _c.CompositorWindow('SmokeDesk', x=200, y=150, w=320, h=200)", wait=1.5)
+                _send(s, "_c.compositor.add_window(_w)", wait=1.5)
+                _send(s, "_c.compositor.start()", wait=1.5)
+                # Give the 30Hz draw loop a couple of ticks.
+                time.sleep(1.0)
+
+                mon.screendump(SCREENDUMP)
+                w, h, rgb = parse_ppm(SCREENDUMP)
+
+                # Title bar runs from y=150 (chrome top) for 16 px; sample the
+                # middle of the bar at the window's horizontal centre.
+                title_px = sample_pixel(w, rgb, 200 + 320 // 2, 150 + 8)
+                check("compositor drew window title bar",
+                      color_close(title_px, (0x22, 0x44, 0x88), tolerance=8),
+                      detail=f"rgb={title_px} at ({200 + 160},{158})")
+
+                # Window body interior (below title bar) — initial surface is
+                # all-zeros (black). Sample mid-body.
+                body_px = sample_pixel(w, rgb, 200 + 320 // 2, 150 + 16 + 100)
+                check("compositor drew window body",
+                      color_close(body_px, (0, 0, 0), tolerance=8),
+                      detail=f"rgb={body_px}")
+
+                # Stop the compositor so we don't leak tasks into later tests.
+                _send(s, "import asyncio; asyncio.ensure_future(_c.compositor.stop())", wait=1.0)
+
                 if init_xy is not None:
                     mon.mouse_move(120, 0)
                     time.sleep(1.2)

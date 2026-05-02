@@ -108,24 +108,26 @@ QEMU_GUI_FLAGS := -machine q35 $(QEMU_X86_CPU) $(QEMU_X86_ACCEL) -m 2G -smp $(SM
 
 .PHONY: all run start stop restart test clean cleanall docker-build \
         _freeze _iso _libpython \
-        x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 \
+        x86_64 run-x86_64 stop-x86_64 test-x86_64 run-gui-x86_64 test-gui-x86_64 run-desktop-x86_64 \
         arm64 run-arm64 stop-arm64 test-arm64 run-gui-arm64 _iso_arm64 \
-        run-gui test-gui
+        run-gui test-gui run-desktop
 
 # Top-level dispatch. These pick x86_64 or arm64 based on TARGET_ARCH (which
 # defaults to the host arch). Explicit per-arch targets are listed below.
 ifeq ($(TARGET_ARCH),arm64)
-all:     arm64
-run:     run-arm64
-stop:    stop-arm64
-test:    test-arm64
-run-gui: run-gui-arm64
+all:         arm64
+run:         run-arm64
+stop:        stop-arm64
+test:        test-arm64
+run-gui:     run-gui-arm64
+run-desktop: run-gui-arm64    # arm64 desktop auto-launch awaits virtio-input
 else
-all:     x86_64
-run:     run-x86_64
-stop:    stop-x86_64
-test:    test-x86_64
-run-gui: run-gui-x86_64
+all:         x86_64
+run:         run-x86_64
+stop:        stop-x86_64
+test:        test-x86_64
+run-gui:     run-gui-x86_64
+run-desktop: run-desktop-x86_64
 endif
 
 start:   run
@@ -142,6 +144,14 @@ run-x86_64: $(ISO_OUT)
 run-gui-x86_64: $(ISO_OUT)
 	qemu-system-x86_64 $(QEMU_GUI_FLAGS)
 
+# Desktop mode: same as run-gui but auto-launches `pythonos_gui` over the
+# TCP REPL once the kernel comes up, so the SDL window opens directly to
+# the compositor + the chosen app (default: bouncing_ball). Override with
+# `make run-desktop-x86_64 PYTHONOS_DESKTOP_APP=terminal` (or editor / files /
+# image_viewer / audio_tone).
+run-desktop-x86_64: $(ISO_OUT)
+	python3 tools/run_desktop.py $(ISO_OUT)
+
 stop-x86_64:
 	@pkill -f "qemu-system-x86_64.*$(ISO_OUT)" || echo "No x86_64 QEMU running."
 
@@ -154,6 +164,7 @@ test-x86_64: $(ISO_OUT)
 # wired (arm64 GUI smoke arrives with the virtio-input follow-up).
 test-gui-x86_64: $(ISO_OUT)
 	python3 tests/gui_smoke_test.py $(ISO_OUT)
+	python3 tests/desktop_smoke_test.py $(ISO_OUT)
 
 test-gui: test-gui-x86_64
 
@@ -207,7 +218,9 @@ KERNEL_PY  := $(wildcard \
                    apps/*.py \
                    apps/demos/*.py \
                    apps/terminal/*.py \
-                   apps/editor/*.py)
+                   apps/editor/*.py \
+                   apps/image_viewer/*.py \
+                   apps/files/*.py)
 ASYNCIO_PY := $(wildcard asyncio/*.py)
 STUBS_PY   := $(wildcard tools/stdlib_stubs/*.py tools/stdlib_stubs/ctypes/*.py)
 EXAMPLES_SRC := $(wildcard examples/*.py examples/*.txt)
