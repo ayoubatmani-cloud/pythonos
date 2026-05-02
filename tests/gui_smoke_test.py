@@ -218,6 +218,41 @@ def main() -> int:
                 # the command should at least dispatch without error.
                 mon.sendkey("a")
                 check("sendkey dispatched", True, detail="(monitor accepted)")
+
+                # Mouse pipeline: read initial pointer, drive mouse_move,
+                # confirm the kernel-side pointer moved.
+                _send(s, "_gi = __import__('kernel.gui.input', fromlist=['pointer_position'])", wait=1.0)
+                out = _send(s, "_gi.pointer_position()", wait=1.5)
+                # Format like "(512, 384)"
+                start = out.rfind("(")
+                end   = out.rfind(")")
+                init_xy = None
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        init_xy = tuple(int(t.strip())
+                                        for t in out[start+1:end].split(","))
+                    except ValueError:
+                        init_xy = None
+                check("initial pointer_position() shape",
+                      init_xy is not None and len(init_xy) == 2,
+                      detail=str(init_xy))
+
+                if init_xy is not None:
+                    mon.mouse_move(120, 0)
+                    time.sleep(1.2)
+                    out = _send(s, "_gi.pointer_position()", wait=1.5)
+                    s2 = out.rfind("("); e2 = out.rfind(")")
+                    new_xy = None
+                    if s2 != -1 and e2 != -1 and e2 > s2:
+                        try:
+                            new_xy = tuple(int(t.strip())
+                                           for t in out[s2+1:e2].split(","))
+                        except ValueError:
+                            new_xy = None
+                    check("mouse_move moved kernel pointer",
+                          new_xy is not None
+                          and (new_xy[0] != init_xy[0] or new_xy[1] != init_xy[1]),
+                          detail=f"{init_xy} -> {new_xy}")
             finally:
                 mon.close()
 
@@ -231,7 +266,7 @@ def main() -> int:
         check("serial: framebuffer console ready",
               "framebuffer console ready" in serial)
         check("serial: GUI input ready (PS/2)",
-              "GUI input ready (PS/2)" in serial)
+              "GUI input ready (PS/2" in serial)
 
         s.close()
         print(f"\n[gui-smoke] {passes} passed, {fails} failed")

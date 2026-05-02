@@ -79,6 +79,10 @@ class Compositor:
         self._tasks: list[asyncio.Task] = []
         self._tick_hz = 30
         self._desktop_bg = 0x202840   # deep-navy desktop
+        # Mouse-drag state
+        self._drag_win: CompositorWindow | None = None
+        self._drag_off_x = 0
+        self._drag_off_y = 0
 
     # ── Window registry ─────────────────────────────────────────────────────
 
@@ -157,6 +161,38 @@ class Compositor:
             self._paint_window_body(win, fb)
             win.dirty = False
 
+    # ── Hit-testing & focus ─────────────────────────────────────────────────
+
+    def _window_at(self, x: int, y: int) -> CompositorWindow | None:
+        """Topmost window covering (x, y), including its chrome."""
+        # We paint front-to-back as list order, so the LAST-painted window
+        # is on top. Iterate in reverse for a topmost-first hit test.
+        for win in reversed(self._windows):
+            top = win.y
+            bottom = win.y + (TITLE_BAR_H if win.chrome else 0) + win.h
+            right  = win.x + win.w
+            if win.x <= x < right and top <= y < bottom:
+                return win
+        return None
+
+    def _focus(self, win: CompositorWindow) -> None:
+        if win not in self._windows:
+            return
+        old = self.focused_window
+        if old is win:
+            return
+        if old != None:
+            old.focused = False
+            old.dirty = True
+        self._focus_idx = self._windows.index(win)
+        win.focused = True
+        win.dirty = True
+        # Raise to top of stack so it paints last (and registers as topmost
+        # in subsequent hit-tests).
+        self._windows.remove(win)
+        self._windows.append(win)
+        self._focus_idx = len(self._windows) - 1
+
     # ── Event routing ───────────────────────────────────────────────────────
 
     def _route_event(self, ev) -> None:
@@ -165,7 +201,47 @@ class Compositor:
             direction = -1 if (ev.mods & _gui_input.MOD_SHIFT) else 1
             self.cycle_focus(direction)
             return
-        # Everything else goes to the focused window
+
+        # Mouse-button-down: focus + maybe-start-drag
+        if ev.kind == _gui_input.MOUSE_DOWN and ev.code == 1:  # left button
+            win = self._window_at(ev.x, ev.y)
+            if win != None:
+                self._focus(win)
+                if win.chrome and ev.y < win.y + TITLE_BAR_H:
+                    # Click on title bar — start drag
+                    self._drag_win  = win
+                    self._drag_off_x = ev.x - win.x
+                    self._drag_off_y = ev.y - win.y
+                else:
+                    # Click in body — deliver to the window
+                    win.deliver(ev)
+            return
+
+        # Mouse-move: continue any in-progress drag, else deliver to focus
+        if ev.kind == _gui_input.MOUSE_MOVE:
+            if self._drag_win != None:
+                self._drag_win.x = ev.x - self._drag_off_x
+                self._drag_win.y = ev.y - self._drag_off_y
+                # Mark every visible surface dirty so the trail clears
+                for w in self._windows:
+                    w.dirty = True
+                return
+            win = self.focused_window
+            if win != None:
+                win.deliver(ev)
+            return
+
+        # Mouse-button-up: end drag if any
+        if ev.kind == _gui_input.MOUSE_UP and ev.code == 1:
+            if self._drag_win != None:
+                self._drag_win = None
+                return
+            win = self.focused_window
+            if win != None:
+                win.deliver(ev)
+            return
+
+        # Everything else (keyboard, other mouse buttons) → focused window
         win = self.focused_window
         if win != None:
             win.deliver(ev)

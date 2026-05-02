@@ -183,3 +183,60 @@ def install_ps2_bridge() -> None:
 
     keyboard.subscribe(_forward)
     keyboard.init()  # unmask IRQ1
+
+
+# ── PS/2 mouse bridge (x86) ─────────────────────────────────────────────────
+
+# Canonical PS/2-mouse button-mask → SDL/sdl2 button index mapping.
+_MOUSE_BTN_TO_INDEX = {
+    0x01: 1,   # PKT_LBTN  → SDL_BUTTON_LEFT
+    0x02: 3,   # PKT_RBTN  → SDL_BUTTON_RIGHT
+    0x04: 2,   # PKT_MBTN  → SDL_BUTTON_MIDDLE
+}
+
+
+_pointer_x = 512
+_pointer_y = 384
+
+
+def install_ps2_mouse_bridge(width: int = 1024, height: int = 768) -> None:
+    """Subscribe to the PS/2 mouse driver's IRQ callbacks and post
+    MOUSE_MOVE / MOUSE_DOWN / MOUSE_UP events into :data:`queue`.
+
+    Maintains a kernel-side cumulative pointer position (``_pointer_x``,
+    ``_pointer_y``) clamped to ``(width, height)`` so the compositor can
+    hit-test windows even though the underlying device only reports
+    deltas.
+    """
+    init()
+    global _pointer_x, _pointer_y
+    _pointer_x = width // 2
+    _pointer_y = height // 2
+
+    from kernel.drivers.mouse import mouse
+
+    if getattr(mouse, '_gui_bridge_installed', False):
+        return
+    mouse._gui_bridge_installed = True
+
+    def _forward(me) -> None:
+        # me is kernel.drivers.mouse.MouseEvent
+        global _pointer_x, _pointer_y
+        if me.dx != 0 or me.dy != 0:
+            _pointer_x = max(0, min(width  - 1, _pointer_x + me.dx))
+            _pointer_y = max(0, min(height - 1, _pointer_y + me.dy))
+            ev = Event(kind=MOUSE_MOVE, x=_pointer_x, y=_pointer_y,
+                       dx=me.dx, dy=me.dy)
+            queue.post(ev)
+        if me.button_changed:
+            kind = MOUSE_DOWN if me.pressed else MOUSE_UP
+            code = _MOUSE_BTN_TO_INDEX.get(me.button_changed, 0)
+            ev = Event(kind=kind, code=code, x=_pointer_x, y=_pointer_y)
+            queue.post(ev)
+
+    mouse.subscribe(_forward)
+    mouse.init()  # enable + unmask IRQ12
+
+
+def pointer_position() -> tuple[int, int]:
+    return _pointer_x, _pointer_y
