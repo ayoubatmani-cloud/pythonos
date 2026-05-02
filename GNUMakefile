@@ -194,7 +194,9 @@ KERNEL_PY  := $(wildcard \
                    kernel/interrupts/*.py \
                    kernel/memory/*.py \
                    kernel/net/*.py \
-                   kernel/sound/*.py)
+                   kernel/sound/*.py \
+                   apps/*.py \
+                   apps/demos/*.py)
 ASYNCIO_PY := $(wildcard asyncio/*.py)
 STUBS_PY   := $(wildcard tools/stdlib_stubs/*.py tools/stdlib_stubs/ctypes/*.py)
 EXAMPLES_SRC := $(wildcard examples/*.py examples/*.txt)
@@ -332,7 +334,7 @@ $(STDLIB_SHIM)/.stamp: $(CPYTHON_LIB)/enum.py $(CPYTHON_LIB)/struct.py $(CPYTHON
 _freeze: $(STDLIB_SHIM)/.stamp
 	@mkdir -p $(BUILD)
 	python3 tools/freeze_kernel.py kernel asyncio $(ENCODINGS_SRC) \
-	    $(STDLIB_SHIM) examples $(BUILD)/frozen_kernel.c
+	    $(STDLIB_SHIM) examples apps $(BUILD)/frozen_kernel.c
 
 $(BUILD)/frozen_kernel.o: $(BUILD)/frozen_kernel.c
 	@mkdir -p $(BUILD)
