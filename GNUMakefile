@@ -224,6 +224,7 @@ KERNEL_PY  := $(wildcard \
                    kernel/memory/*.py \
                    kernel/net/*.py \
                    kernel/sound/*.py \
+                   kernel/drivers/sound/*.py \
                    apps/*.py \
                    apps/demos/*.py \
                    apps/terminal/*.py \
@@ -400,6 +401,7 @@ QEMU_ARM64_GUI_FLAGS := -machine virt $(QEMU_ARM64_CPU) $(QEMU_ARM64_ACCEL) -m 2
                     -no-reboot -no-shutdown \
                     -display sdl -device ramfb -serial stdio \
                     -device virtio-keyboard-device -device virtio-tablet-device \
+                    -audiodev sdl,id=a -device virtio-sound-device,audiodev=a \
                     -netdev user,id=net1,hostfwd=tcp::$(ARM64_REPL_HOST_PORT)-:5000,hostfwd=tcp::$(ARM64_FILE_HOST_PORT)-:7000 -device virtio-net-device,netdev=net1
 
 ARM64_DISK := disk-arm64.img

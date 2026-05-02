@@ -201,7 +201,9 @@ async def _kernel_main(
         log.info("kernel: TCP REPL server starting (nc localhost 5555)")
         _write("TCP REPL ready — connect: nc localhost 5555\n")
 
-    # ── Sound (x86_64 only — Intel HDA is not present on arm64 virt) ──────
+    # ── Sound ─────────────────────────────────────────────────────────────
+    # x86: Intel HDA via PCI (requires PCI scan to have run already).
+    # arm64: virtio-snd via virtio-mmio.
     if _ARCH == 'x86_64':
         import kernel.sound.hda
         _hda_mod = _sys.modules['kernel.sound.hda']
@@ -214,7 +216,14 @@ async def _kernel_main(
             mixer.attach(hda_dev)
             log.info("kernel: HDA sound ready")
     else:
-        log.info("kernel: skipping HDA sound (arm64)")
+        from kernel.drivers.sound.virtio_snd import find_virtio_snd
+        snd = find_virtio_snd()
+        if snd:
+            from kernel.sound.mixer import mixer
+            mixer.attach(snd)
+            log.info("kernel: virtio-snd ready")
+        else:
+            log.info("kernel: no audio device found (arm64)")
 
     # ── VirtIO-MMIO block device (arm64 only — x86 uses PCI VirtIO) ───────
     if _ARCH == 'arm64':
