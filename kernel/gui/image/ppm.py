@@ -29,11 +29,9 @@ def _read_token(data: bytes, off: int) -> tuple[bytes, int]:
     return data[start:off], off
 
 
-def load_ppm(path: str) -> SDL_Surface:
-    with open(path, "rb") as f:
-        data = f.read()
+def decode_ppm(data: bytes) -> SDL_Surface:
     if not data.startswith(b"P6"):
-        raise ValueError(f"PPM: {path}: not a P6 file")
+        raise ValueError(f"PPM: not a P6 file")
 
     off = 2
     w_tok, off = _read_token(data, off)
@@ -47,13 +45,13 @@ def load_ppm(path: str) -> SDL_Surface:
     height = int(h_tok)
     maxval = int(m_tok)
     if maxval > 255:
-        raise ValueError(f"PPM: {path}: 16-bit (maxval={maxval}) not supported")
+        raise ValueError(f"PPM: 16-bit (maxval={maxval}) not supported")
 
     s = SDL_Surface(width, height)
     n_pixels = width * height
     body = data[off : off + n_pixels * 3]
     if len(body) < n_pixels * 3:
-        raise ValueError(f"PPM: {path}: truncated pixel data")
+        raise ValueError(f"PPM: truncated pixel data")
     for i in range(n_pixels):
         r = body[i*3]
         g = body[i*3 + 1]
@@ -64,3 +62,9 @@ def load_ppm(path: str) -> SDL_Surface:
         s.pixels[o + 2] = r
         s.pixels[o + 3] = 0xFF
     return s
+
+
+def load_ppm(path: str) -> SDL_Surface:
+    """File-based wrapper. Use :func:`decode_ppm` inside the kernel."""
+    with open(path, "rb") as f:
+        return decode_ppm(f.read())

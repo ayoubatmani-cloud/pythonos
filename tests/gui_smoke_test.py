@@ -161,6 +161,12 @@ def main() -> int:
         check("examples/sdl_text.py runs", "sdl_text: ok" in out,
               detail=out.splitlines()[-1] if out.strip() else "(empty)")
 
+        # 1d. PNG decoder corpus item — decode an embedded 16x16 RGBA PNG.
+        out = _send(s, "run('/examples/sdl_image.py')", wait=6.0)
+        check("examples/sdl_image.py runs (PNG decode)",
+              "sdl_image: ok" in out,
+              detail=out.splitlines()[-1] if out.strip() else "(empty)")
+
         # 2. /bin/pythonos_gui.py is registered.
         out = _send(s, "sh('ls /bin')", wait=3.0)
         check("/bin/pythonos_gui.py present",

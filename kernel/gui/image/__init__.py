@@ -27,27 +27,34 @@ def _detect(magic: bytes) -> str:
     return "unknown"
 
 
-def load(path: str) -> SDL_Surface:
-    """Decode an image file at ``path`` into an :class:`SDL_Surface`.
+def load_bytes(data: bytes) -> SDL_Surface:
+    """Decode an image from a byte string into an :class:`SDL_Surface`.
 
-    Raises :class:`NotImplementedError` for formats whose decoder is
-    not yet shipped in the kernel.
+    The kernel uses this path because libc's ``open()`` returns ENOSYS;
+    callers read the file through the VFS and pass the bytes here.
     """
-    p = path.decode() if isinstance(path, (bytes, bytearray)) else str(path)
-    with open(p, "rb") as f:
-        head = f.read(16)
-    fmt = _detect(head)
-    if fmt == "bmp":
-        return SDL_LoadBMP(p)
-    if fmt == "ppm":
-        from kernel.gui.image.ppm import load_ppm
-        return load_ppm(p)
+    fmt = _detect(data[:16])
     if fmt == "png":
-        raise NotImplementedError(
-            "PNG: decoder needs zlib or pure-Python inflate "
-            "(GUI Phase 6 follow-up)")
+        from kernel.gui.image.png import decode_png
+        return decode_png(data)
+    if fmt == "ppm":
+        from kernel.gui.image.ppm import decode_ppm
+        return decode_ppm(data)
+    if fmt == "bmp":
+        from kernel.gui.image.bmp import decode_bmp
+        return decode_bmp(data)
     if fmt == "jpeg":
         raise NotImplementedError(
             "JPEG: decoder needs Huffman+DCT pure-Python implementation "
             "(GUI Phase 6 follow-up)")
-    raise ValueError(f"image.load: unsupported format for {p}")
+    raise ValueError("image.load_bytes: unsupported format")
+
+
+def load(path: str) -> SDL_Surface:
+    """File-based wrapper. Works on hosts where ``open()`` is wired up;
+    inside the bare-metal kernel callers should use :func:`load_bytes`
+    after reading via the VFS."""
+    p = path.decode() if isinstance(path, (bytes, bytearray)) else str(path)
+    with open(p, "rb") as f:
+        data = f.read()
+    return load_bytes(data)
