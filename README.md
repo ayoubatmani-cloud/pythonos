@@ -1,92 +1,92 @@
-# PythonOS
+← بايثون أو إس
 
-A bare-metal operating system where CPython 3.14 **is** the kernel — not a program running on an OS, but the OS itself. Python owns the machine from interrupt handlers to the interactive shell. Runs on x86_64 and arm64 (QEMU `virt`).
+نظام تشغيل مُباشر حيث يُمثّل CPython 3.14 النواة - ليس برنامجًا يعمل على نظام التشغيل، بل نظام التشغيل نفسه. يتحكّم بايثون بالجهاز بالكامل، بدءًا من معالجات المقاطعات وصولًا إلى واجهة سطر الأوامر التفاعلية. يعمل على معالجات x86_64 و arm64 (باستخدام QEMU `virt`).
 
-Boots directly to a `>>>` prompt on the serial console. An opt-in **GUI desktop** with a stacking compositor, PySDL2-compatible Python API, PNG/JPEG decoders, audio mixer, and five built-in apps (terminal, editor, file browser, image viewer, audio/graphics demos) is one make target away — see **GUI Mode** below.
+يبدأ التشغيل مباشرةً إلى موجه الأوامر `>>>` على وحدة التحكم التسلسلية. يتوفر سطح مكتب بواجهة رسومية اختيارية مع مُركِّب مُكدَّس، وواجهة برمجة تطبيقات بايثون متوافقة مع PySDL2، ومفكِّكات ترميز PNG/JPEG، ومُخَلِّط صوت، وخمسة تطبيقات مُدمجة (طرفية، ومحرر، ومتصفح ملفات، وعارض صور، وعروض توضيحية للصوت/الرسومات) بمجرد تنفيذ أمر make target - انظر **وضع واجهة المستخدم الرسومية** أدناه.
 
-Run `make help` at any time for the top-level target listing.
+قم بتشغيل الأمر `make help` في أي وقت لعرض قائمة الأهداف الرئيسية.
 
-## Quick Start
+# بدء سريع
 
-### Prerequisites
+المتطلبات الأساسية
 
-- Docker (for cross-compilation toolchain)
-- QEMU (`brew install qemu` on macOS)
-- CPython 3.14 source tree (fetched by the build)
+- دوكر (لسلسلة أدوات الترجمة المتقاطعة)
+- QEMU (`brew install qemu` على نظام macOS)
+- شجرة مصدر CPython 3.14 (تم جلبها بواسطة عملية البناء)
 
-### First-time build (~10 min to cross-compile CPython)
+### عملية البناء لأول مرة (~10 دقائق للتجميع المتقاطع لـ CPython)
 
 ```bash
-make docker-build   # build the Docker cross-compilation image once
-make                # cross-compile libpython + kernel, produce pythonos.iso
+make docker-build # بناء صورة Docker المتوافقة مع الترجمة المتقاطعة مرة واحدة
+قم بتنفيذ الأمر التالي: make # cross-compile libpython + kernel, produce pythonos.iso
 ```
 
-### Subsequent builds (fast — libpython is cached)
+### عمليات البناء اللاحقة (سريعة - يتم تخزين libpython مؤقتًا)
 
 ```bash
-make                # rebuild kernel + ISO if sources changed
+قم بإنشاء # أعد بناء النواة + ملف ISO إذا تغيرت المصادر
 ```
 
-### Run
+### يجري
 
 ```bash
-# Default boot — serial REPL, no GUI window. Picks host arch automatically.
-make run
+# التمهيد الافتراضي - واجهة سطر أوامر تسلسلية، بدون نافذة واجهة رسومية. يختار بنية النظام المضيف تلقائيًا.
+قم بالجري
 
-# x86_64 CPU count defaults to 2; override when needed
+# عدد وحدات المعالجة المركزية x86_64 افتراضيًا هو 2؛ قم بتغييره عند الحاجة
 SMP_CPUS=4 make run
 
-# Experimental x86_64 CPython free-threading build
+# إصدار تجريبي من CPython x86_64 بدون ترابط
 PYTHONOS_FREE_THREADING=1 make cleanall all
 
-# Explicit per-arch forms when you want to be specific:
+# نماذج صريحة لكل قوس عندما تريد أن تكون محددًا:
 make run-x86_64
 make run-arm64
 
-# Kill a running instance
-make stop
+# إنهاء عملية قيد التشغيل
+توقف
 make stop-arm64
 ```
 
-Use `Ctrl-A X` to exit QEMU.
+استخدم `Ctrl-A X` للخروج من QEMU.
 
-### GUI Mode
+### وضع واجهة المستخدم الرسومية
 
-Opt-in graphical desktop with a stacking compositor, mouse + keyboard input, audio output, and five built-in apps. The default `make run` and `make test` paths are unchanged — they still boot serial-only with `-nographic`.
+سطح مكتب رسومي اختياري مع مُركِّب مُكدَّس، وإدخال بالماوس ولوحة المفاتيح، وإخراج صوتي، وخمسة تطبيقات مُدمجة. مسارات `make run` و`make test` الافتراضية لم تتغير - لا تزال تعمل بنظام التشغيل التسلسلي فقط مع `-nographic`.
 
 ```bash
-# Boot to framebuffer REPL inside an SDL window;
-# type `pythonos_gui` at >>> to open the compositor + an app.
+# التمهيد إلى REPL الخاص بإطار المخزن المؤقت داخل نافذة SDL؛
+# اكتب `pythonos_gui` في >>> لفتح برنامج التركيب + تطبيق.
 make run-gui
 
-# Boot AND auto-launch the desktop in one step (host runs a small
-# launcher that sends `pythonos_gui <app>` over the TCP REPL once
-# the kernel comes up).
-make run-desktop
-PYTHONOS_DESKTOP_APP=terminal     make run-desktop
-PYTHONOS_DESKTOP_APP=editor       make run-desktop
-PYTHONOS_DESKTOP_APP=files        make run-desktop
+# تشغيل سطح المكتب وتشغيله تلقائيًا في خطوة واحدة (يقوم المضيف بتشغيل برنامج صغير)
+# مشغل يرسل `pythonos_gui <app>` عبر واجهة TCP التفاعلية مرة واحدة
+# تظهر النواة).
+إنشاء سطح المكتب
+PYTHONOS_DESKTOP_APP=terminal make run-desktop
+PYTHONOS_DESKTOP_APP=editor make run-desktop
+PYTHONOS_DESKTOP_APP=files make run-desktop
 PYTHONOS_DESKTOP_APP=image_viewer make run-desktop
-PYTHONOS_DESKTOP_APP=audio_tone   make run-desktop
+PYTHONOS_DESKTOP_APP=audio_tone make run-desktop
 ```
 
-Inside the compositor:
-- **Tab** / **Shift-Tab** cycles focus between windows.
-- Click a window's title bar to drag it; click in the body to focus + raise.
-- **ESC** typically closes the focused app and returns to the REPL.
+داخل برنامج التركيب:
+- **Tab** / **Shift-Tab** يقوم بتبديل التركيز بين النوافذ.
+- انقر على شريط عنوان النافذة لسحبها؛ انقر في جسم النافذة للتركيز عليها ورفعها.
+- يقوم زر **ESC** عادةً بإغلاق التطبيق النشط والعودة إلى REPL.
 
-See **`docs/gui.md`** for the full feature reference (compositor, sdl2 API surface, image decoders, audio backends, apps).
+راجع **`docs/gui.md`** للاطلاع على مرجع الميزات الكامل (المركب، واجهة برمجة تطبيقات sdl2، فك تشفير الصور، الخلفيات الصوتية، التطبيقات).
 
-The no-GIL build is currently supported on x86_64 QEMU with SMP enabled. It
-boots CPython with `PY_GIL_DISABLED=1`, starts AP-backed pthread workers through
-`_thread`, and uses a small mmap shim that validates fixed mappings before
-touching memory. The support boundary is still intentionally narrow: native
-threads are worker dispatches onto initialized APs, not a full scheduler for
-arbitrary blocking POSIX workloads.
+يدعم نظام QEMU x86_64 مع تمكين SMP حاليًا إصدارًا بدون GIL.
+يقوم بتشغيل CPython مع `PY_GIL_DISABLED=1`، ويبدأ تشغيل عمال pthread المدعومين بـ AP من خلال
+`_thread`، ويستخدم طبقة وسيطة صغيرة لـ mmap تتحقق من صحة التعيينات الثابتة قبل
+استحضار الذكريات. لا يزال نطاق الدعم ضيقًا عمدًا: أصلي
+الخيوط هي عمليات إرسال للعمال إلى نقاط الوصول المُهيأة، وليست مُجدولًا كاملًا لـ
+أحمال عمل POSIX ذات الحظر التعسفي.
 
-### Connect to the TCP REPL
+### الاتصال بـ TCP REPL
 
-Once the kernel is running, a multi-session Python REPL listens on TCP port 5000 inside QEMU. QEMU forwards it to your host:
+بمجرد تشغيل النواة، يستمع برنامج Python REPL متعدد الجلسات على منفذ TCP رقم 5000 داخل QEMU. يقوم QEMU بإعادة توجيهه إلى جهازك المضيف:
 
 ```bash
 # x86_64
@@ -96,50 +96,50 @@ nc localhost 5555
 nc localhost 5556
 ```
 
-Each connection gets an independent kernel shell with access to all live kernel objects. Multiple sessions can run simultaneously — this is the point: Python is the kernel, and concurrency is `asyncio`, not fork/exec.
+يحصل كل اتصال على واجهة سطر أوامر مستقلة مع إمكانية الوصول إلى جميع كائنات النواة النشطة. يمكن تشغيل جلسات متعددة في وقت واحد - وهذا هو الهدف: بايثون هي النواة، والتزامن هو `asyncio`، وليس fork/exec.
 
 ```
-PythonOS kernel shell
-Python 3.14.0a0
-Type 'help' for help.
-Commands: ls ps pwd cd cat cp mv ftp ed sysinfo netstat
-Helpers: sh()  sh('cmd args')  run('/path')  clear()
+واجهة سطر أوامر نواة نظام التشغيل بايثون
+بايثون 3.14.0a0
+اكتب 'help' للحصول على المساعدة.
+الأوامر: ls ps pwd cd cat cp mv ftp ed sysinfo netstat
+الدوال المساعدة: sh() sh('cmd args') run('/path') clear()
 
 >>> 1 + 1
 2
 >>> sysinfo
-PythonOS
-Scheduler: 3 tasks
-cwd: /
+بايثون
+المجدول: 3 مهام
+المجلد الحالي: /
 >>> ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  ed.py  sysinfo.py  netstat.py
+... ls.py ps.py pwd.py cd.py cat.py cp.py mv.py ftp.py ed.py sysinfo.py netstat.py
 >>> cd /tmp
->>> pwd
+>>> كلمة المرور
 /tmp
 >>> sh()
 $ sysinfo
-PythonOS
-Scheduler: 3 tasks
-cwd: /tmp
+بايثون
+المجدول: 3 مهام
+المجلد الحالي: /tmp
 $ ls
-.  ..
-$ exit
+...
+$ خروج
 >>> import kernel.log as log; log.info("hello from REPL")
 ```
 
-### Unix-like shell experience
+### تجربة استخدام واجهة سطر الأوامر الشبيهة بنظام يونكس
 
-The kernel shell offers a Unix-like command experience nested inside the Python REPL. The two modes coexist without friction.
+توفر واجهة سطر الأوامر الخاصة بالنواة تجربة أوامر شبيهة بنظام يونكس مضمنة داخل بيئة بايثون التفاعلية (REPL). ويتعايش الوضعان بسلاسة تامة.
 
-#### Bare-word command dispatch
+#### إرسال الأوامر بالكلمات المجردة
 
-Any bare identifier typed at `>>>` that is not already a Python name is looked up as `/bin/<name>.py` and executed automatically. No `run()`, no quotes, no `.py` extension needed:
+أي مُعرِّف مُجرَّد يُكتب في `>>>` وليس اسم بايثون مُسبقًا، يتم البحث عنه كـ `/bin/<name>.py` ويتم تنفيذه تلقائيًا. لا حاجة إلى `run()`، ولا علامات اقتباس، ولا امتداد `.py`.
 
 ```
 >>> ls
 >>> ls /bin
 >>> ps
->>> pwd
+>>> كلمة المرور
 >>> cd /tmp
 >>> cat /examples/README.txt
 >>> ed /tmp/notes.txt
@@ -147,7 +147,7 @@ Any bare identifier typed at `>>>` that is not already a Python name is looked u
 >>> netstat
 ```
 
-Arguments are split on whitespace and passed to the script as `argv`:
+يتم تقسيم الوسائط بناءً على المسافات البيضاء وتمريرها إلى البرنامج النصي كـ `argv`:
 
 ```
 >>> cp /bin/sysinfo.py /tmp/my_sysinfo.py
@@ -156,45 +156,45 @@ Arguments are split on whitespace and passed to the script as `argv`:
 >>> ftp put /tmp/host-file.txt
 ```
 
-#### Built-in commands
+#### الأوامر المدمجة
 
-| Command | Description |
+| الأمر | الوصف |
 |---|---|
-| `ls [path]` | List directory (default: current working directory) |
-| `ps` | List kernel tasks with PID, name, state |
-| `pwd` | Print current working directory |
-| `cd [path]` | Change directory (supports `..`, relative paths; default: `/`) |
-| `cat FILE [...]` | Print file contents |
-| `cp SRC DST` | Copy a file |
-| `mv SRC DST` | Move / rename a file |
-| `ftp get DST [PORT]` | Receive one TCP file stream into TmpFS |
-| `ftp put SRC [HOST] [PORT]` | Send one TmpFS file over TCP |
-| `ed [path]` | ed-style line editor |
-| `sysinfo` | System overview |
-| `netstat` | Network interface status |
+| `ls [path]` | عرض محتويات المجلد (الافتراضي: مجلد العمل الحالي) |
+| `ps` | عرض قائمة مهام النواة مع معرف العملية (PID) والاسم والحالة |
+| `pwd` | طباعة دليل العمل الحالي |
+| `cd [path]` | تغيير الدليل (يدعم `..`، المسارات النسبية؛ الافتراضي: `/`) |
+| `cat FILE [...]` | طباعة محتويات الملف |
+| `cp SRC DST` | نسخ ملف |
+| `mv SRC DST` | نقل / إعادة تسمية ملف |
+| `ftp get DST [PORT]` | استلام دفق ملف TCP واحد إلى TmpFS |
+| `ftp put SRC [HOST] [PORT]` | إرسال ملف TmpFS واحد عبر TCP |
+| `ed [path]` | محرر سطور بنمط ed |
+| `sysinfo` | نظرة عامة على النظام |
+| `netstat` | حالة واجهة الشبكة |
 
-#### Shell sub-REPL: `sh()`
+#### واجهة سطر الأوامر الفرعية: `sh()`
 
-Calling `sh()` with no arguments drops into an interactive shell with a `$ ` prompt. It dispatches the same `/bin/*.py` commands and shares `cwd` state with the parent session. Type `exit` to return to `>>>`:
+يؤدي استدعاء `sh()` بدون وسائط إلى فتح نافذة طرفية تفاعلية مع موجه `$`. تُنفذ هذه النافذة نفس أوامر `/bin/*.py` وتشارك حالة `cwd` مع الجلسة الأصلية. اكتب `exit` للعودة إلى `>>>`.
 
 ```
 >>> sh()
 $ ls /bin
-.  ..  ls.py  ps.py  pwd.py  cd.py  cat.py  cp.py  mv.py  ftp.py  ed.py  sysinfo.py  netstat.py
+... ls.py ps.py pwd.py cd.py cat.py cp.py mv.py ftp.py ed.py sysinfo.py netstat.py
 $ cd /tmp
-$ pwd
+$ كلمة المرور
 /tmp
 $ /examples/tone.py
-$ exit
->>> cwd        # cwd change is visible back in Python
+$ خروج
+>>> cwd # تغيير cwd مرئي مرة أخرى في بايثون
 '/tmp'
 ```
 
-Inside `sh()`, `.py` paths run directly, and `foo.py` resolves like
-`./foo.py` from the current directory. Python files are native executables in
+داخل `sh()`، يتم تشغيل مسارات `.py` مباشرةً، ويتم حل `foo.py` مثل
+`./foo.py` من المجلد الحالي. ملفات بايثون هي ملفات تنفيذية أصلية في
 PythonOS.
 
-`sh('cmd args')` is the single-shot form for scripted use:
+`sh('cmd args')` هو الشكل الذي يُستخدم لمرة واحدة في البرامج النصية:
 
 ```python
 >>> sh('cp /bin/sysinfo.py /tmp/backup.py')
@@ -202,40 +202,40 @@ PythonOS.
 >>> sh('/examples/tone.py')
 ```
 
-#### Writing your own commands
+#### كتابة أوامرك الخاصة
 
-Any `.py` file placed in `/bin/` becomes a shell command automatically. Scripts run inside the kernel namespace — `vfs`, `scheduler`, `pci`, `net`, `OpenFlags`, and `print` are pre-bound. Top-level `await` is supported so scripts can call async VFS operations directly:
+أي ملف بامتداد `.py` موجود في `/bin/` يُصبح تلقائيًا أمرًا برمجيًا. تُشغَّل البرامج النصية داخل مساحة اسم النواة - حيث يتم ربط `vfs` و`scheduler` و`pci` و`net` و`OpenFlags` و`print` مسبقًا. يدعم النظام استخدام `await` على مستوى النظام الرئيسي، مما يسمح للبرامج النصية باستدعاء عمليات VFS غير المتزامنة مباشرةً.
 
 ```python
 # /bin/mycommand.py
-# Invoked by typing: mycommand arg1 arg2
-path = argv[0] if argv else cwd
+# يتم استدعاؤه بكتابة: mycommand arg1 arg2
+path = argv[0] إذا كان argv موجودًا، وإلا cwd
 entries = await vfs.readdir(path)
 for e in entries:
-    print(e)
+    مطبوعات)
 ```
 
-`argv` is a list of string arguments. `cwd` is the current working directory string; a script can update it (`cwd = '/new/path'`) and the shell propagates the change back.
+`argv` عبارة عن قائمة من الوسائط النصية. `cwd` هو مسار دليل العمل الحالي؛ يمكن للبرنامج النصي تحديثه (`cwd = '/new/path'`) ويقوم النظام بنشر التغيير مرة أخرى.
 
-Create a new command at runtime:
+إنشاء أمر جديد أثناء التشغيل:
 
 ```python
 >>> fd = await vfs.open('/bin/hello.py', OpenFlags.WRONLY | OpenFlags.CREAT | OpenFlags.TRUNC)
 >>> await vfs.write(fd, b"print('hello, ' + (argv[0] if argv else 'world'))\n")
 >>> vfs.close(fd)
->>> hello
-hello, world
->>> hello PythonOS
-hello, PythonOS
+>>> مرحباً
+مرحبا بالعالم
+>>> مرحباً بايثون أو إس
+مرحباً، بايثون أو إس
 ```
 
-#### Example programs
+برامج نموذجية
 
-PythonOS also seeds `/examples` with readable Python programs that are frozen into the kernel as bytecode, so they can use normal functions, classes, async loops, and imports without depending on the limited runtime compiler:
+يقوم نظام التشغيل PythonOS أيضًا بتزويد مجلد `/examples` ببرامج بايثون قابلة للقراءة يتم تجميدها في النواة على شكل بايت كود، بحيث يمكنها استخدام الدوال العادية والفئات والحلقات غير المتزامنة وعمليات الاستيراد دون الاعتماد على مترجم وقت التشغيل المحدود:
 
 ```
 >>> ls /examples
-README.txt  async_tasks.py  hello_kernel.py  primes.py  recv_file.py  send_file.py  tone.py  vfs_demo.py
+README.txt async_tasks.py hello_kernel.py primes.py recv_file.py send_file.py tone.py vfs_demo.py
 >>> run('/examples/hello_kernel.py')
 >>> run('/examples/vfs_demo.py')
 >>> run('/examples/async_tasks.py')
@@ -243,375 +243,375 @@ README.txt  async_tasks.py  hello_kernel.py  primes.py  recv_file.py  send_file.
 >>> run('/examples/tone.py')
 ```
 
-The smaller examples cover shell arguments, scheduler/VFS inspection, TmpFS
-read/write, cooperative asyncio tasks, and pure-Python computation.
+تتناول الأمثلة الأصغر حجماً وسائط سطر الأوامر، وفحص المجدول/نظام الملفات الافتراضي، ونظام الملفات المؤقت (TmpFS).
+القراءة/الكتابة، ومهام asyncio التعاونية، والحساب باستخدام لغة بايثون النقية.
 
-The `ed` command is backed by `kernel.ed`, a line-oriented editor inspired by
-`py_ed`. It supports append/insert/change/delete, print/number/literal print,
-marks, move/copy, read/write/write-append, one-level undo, and `q`/`Q`.
+يعتمد الأمر `ed` على `kernel.ed`، وهو محرر نصوص موجه نحو الأسطر مستوحى من
+`py_ed`. يدعم هذا البرنامج الإلحاق/الإدراج/التغيير/الحذف، والطباعة/الترقيم/طباعة القيم الحرفية.
+العلامات، النقل/النسخ، القراءة/الكتابة/الكتابة والإلحاق، التراجع على مستوى واحد، و`q`/`Q`.
 
-The `ftp` command provides a small FTP-like file copy workflow over one raw TCP stream. It is not the RFC FTP protocol; it is a simple get/put tool built for the PythonOS shell and TmpFS:
+يُوفّر الأمر `ftp` آلية نسخ ملفات بسيطة تُشبه بروتوكول FTP عبر قناة TCP واحدة. وهو ليس بروتوكول FTP المُعتمد من RFC، بل هو أداة بسيطة لجلب/وضع الملفات، مُصممة خصيصًا لبيئة PythonOS ونظام الملفات المؤقت TmpFS.
 
 ```
-# inbound to PythonOS; make run forwards host localhost:17000 to guest port 7000
+# وارد إلى PythonOS؛ يقوم الأمر make run بإعادة توجيه المضيف localhost:17000 إلى منفذ الضيف 7000
 >>> ftp get /tmp/inbox.txt
-# host terminal:
+# طرفية المضيف:
 $ nc localhost 17000 < local-file.txt
-# run-arm64 forwards host localhost:17002 to guest port 7000
+# run-arm64 يعيد توجيه المضيف localhost:17002 إلى منفذ الضيف 7000
 
-# outbound from PythonOS to the QEMU host at 10.0.2.2
-# host terminal:
+# صادر من PythonOS إلى مضيف QEMU على العنوان 10.0.2.2
+# طرفية المضيف:
 $ nc -l 7001 > from-pythonos.txt
 >>> ftp put /tmp/inbox.txt
 ```
 
-Use `FILE_HOST_PORT=<port> make run` if you need a different host-side
-forwarded port.
+استخدم الأمر `FILE_HOST_PORT=<port> make run` إذا كنت بحاجة إلى جانب مضيف مختلف.
+تم إعادة توجيه المنفذ.
 
-The older file-transfer examples are still available as readable source at `/examples/recv_file.py` and `/examples/send_file.py`.
+لا تزال أمثلة نقل الملفات القديمة متاحة كمصدر قابل للقراءة في `/examples/recv_file.py` و `/examples/send_file.py`.
 
-#### Mixing Python and shell
+#### مزج بايثون وشل
 
-The two modes are additive. Anything that is a valid Python expression or statement still goes through the Python interpreter. The shell dispatch only fires for bare identifiers that are not already in the Python namespace:
+الوضعان متكاملان. أي تعبير أو عبارة صحيحة في بايثون تمر عبر مترجم بايثون. يتم تنفيذ أمر shell فقط للمعرفات المجردة غير الموجودة مسبقًا في مساحة أسماء بايثون.
 
 ```
->>> ls                        # shell dispatch → /bin/ls.py
->>> list(pci)                 # Python expression → PCI device list
->>> for d in pci: print(d)    # Python statement → loop over PCI bus
->>> sh()                      # enter shell sub-REPL
-$ ps                          # shell command
-$ exit                        # return to >>>
->>> scheduler.ps()            # back to Python
+>>> ls # shell dispatch â†' /bin/ls.py
+>>> list(pci) # تعبير بايثون ← قائمة أجهزة PCI
+>>> for d in pci: print(d) # عبارة بايثون â†' حلقة تكرار على ناقل PCI
+>>> sh() # الدخول إلى واجهة سطر الأوامر الفرعية REPL
+$ ps # أمر shell
+$ خروج العودة إلى >>>
+>>> scheduler.ps() # العودة إلى بايثون
 ```
 
-### Serial shell
+### واجهة سطر الأوامر التسلسلية
 
-The `>>>` prompt is also available on the serial console (the QEMU terminal window itself). All interactive I/O goes through COM1 (x86_64) or PL011 (arm64) — no PS/2, no framebuffer required.
+يتوفر موجه الأوامر `>>>` أيضًا على وحدة التحكم التسلسلية (نافذة طرفية QEMU نفسها). تتم جميع عمليات الإدخال/الإخراج التفاعلية عبر COM1 (x86_64) أو PL011 (arm64) - لا حاجة إلى PS/2 أو مخزن إطار.
 
-### Run the smoke tests
+### قم بإجراء اختبارات الدخان
 
 ```bash
-make test           # default boot smoke (serial + TCP REPL based)
-make test-gui       # GUI subsystem smoke (headless screendump + audio capture)
+إجراء اختبار # دخان التمهيد الافتراضي (مبني على التسلسل + TCP REPL)
+إنشاء اختبار واجهة المستخدم الرسومية # دخان النظام الفرعي لواجهة المستخدم الرسومية (لقطة شاشة بدون واجهة رسومية + التقاط الصوت)
 ```
 
-`make test` boots PythonOS in QEMU as a subprocess, waits for the TCP REPL to become reachable, runs a set of Python expressions through it, verifies the expected output, and exits with code 0 on pass. The x86_64 smoke test boots with two virtual CPUs by default; use `SMP_CPUS=4 make test` to expose more.
+يقوم الأمر `make test` بتشغيل نظام PythonOS في QEMU كعملية فرعية، وينتظر حتى يصبح الوصول إلى واجهة TCP التفاعلية (REPL)، ثم يُشغّل مجموعة من تعابير بايثون من خلالها، ويتحقق من المخرجات المتوقعة، ويخرج برمز 0 عند النجاح. يبدأ اختبار x86_64 الأولي بمعالجين افتراضيين افتراضيين؛ استخدم `SMP_CPUS=4 make test` لعرض المزيد.
 
-`make test-gui` runs three additional suites on x86_64 (or one on arm64):
-- **gui smoke** — sdl2 corpus (`hello`/`renderer`/`text`/`image`/`jpeg`), compositor render, mouse pipeline, pointer round-trip, serial markers
-- **desktop smoke** — boots, auto-launches `pythonos_gui bouncing_ball`, screendumps, asserts pixel-exact desktop bg + title bar + window body + tile-hash golden
-- **audio smoke** — boots with `-audiodev wav,id=a`, runs `examples/tone.py`, verifies the captured WAV header (48 kHz / 2ch / 16-bit)
+يقوم الأمر `make test-gui` بتشغيل ثلاث مجموعات اختبار إضافية على x86_64 (أو مجموعة واحدة على arm64):
+- **واجهة المستخدم الرسومية** — مجموعة بيانات SDL2 (`hello`/`renderer`/`text`/`image`/`jpeg`)، عرض المُركِّب، مسار الماوس، نقل المؤشر ذهابًا وإيابًا، علامات التسلسل
+- **دخان سطح المكتب** — يبدأ التشغيل، ويشغل تلقائيًا `pythonos_gui bouncing_ball`، ويلتقط لقطات شاشة، ويؤكد تطابق خلفية سطح المكتب وشريط العنوان وجسم النافذة وتجزئة البلاطة بدقة البكسل
+- **دخان صوتي** — يبدأ التشغيل باستخدام `-audiodev wav,id=a`، ويشغل `examples/tone.py`، ويتحقق من رأس ملف WAV الملتقط (48 كيلو هرتز / قناتان / 16 بت)
 
-Counts at HEAD: 41 / 28 / 23 / 5 / 6 / 8 across the six suites (default x86, default arm64, x86 gui, x86 desktop, x86 audio, arm64 gui) — **111 tests** total.
+عدد النتائج في HEAD: 41 / 28 / 23 / 5 / 6 / 8 عبر المجموعات الست (x86 الافتراضي، arm64 الافتراضي، x86 gui، x86 desktop، x86 audio، arm64 gui) - **111 اختبارًا** إجمالاً.
 
-For the no-GIL path, run `PYTHONOS_FREE_THREADING=1 SMP_CPUS=4 make test`.
-That smoke covers the boot-time SMP self-tests, `_hal.pthread_selftest()`, and
-`/examples/thread_demo.py`, including multiple Python worker threads and timed
-lock acquisition.
+بالنسبة للمسار بدون GIL، قم بتشغيل `PYTHONOS_FREE_THREADING=1 SMP_CPUS=4 make test`.
+يغطي هذا الدخان اختبارات SMP الذاتية عند بدء التشغيل، `_hal.pthread_selftest()`، و
+`/examples/thread_demo.py`، بما في ذلك خيوط عاملة متعددة في بايثون ومؤقتة
+الحصول على القفل.
 
 ---
 
-## What Is This?
+## ما هذا؟
 
-Most operating systems are written in C, with scripting languages bolted on top as userspace programs. PythonOS inverts that: the Python interpreter **is** the kernel primitive. There is no C runtime managing Python — Python manages the machine.
+تُكتب معظم أنظمة التشغيل بلغة C، مع إضافة لغات برمجة نصية كبرامج في مساحة المستخدم. أما نظام PythonOS فيعكس ذلك: فمفسر بايثون هو النواة الأساسية. لا يوجد وقت تشغيل C لإدارة بايثون، بل بايثون هي التي تدير الجهاز.
 
-The philosophical bet: "everything is an object" is a better organizing principle for a kernel than "everything is a file." `importlib`, `exec`, and `inspect` become the OS hot-reload and introspection syscalls. The system can extend itself at runtime without rebooting.
+الرهان الفلسفي: "كل شيء كائن" هو مبدأ تنظيمي أفضل لنواة النظام من "كل شيء ملف". تصبح وظائف `importlib` و`exec` و`inspect` بمثابة استدعاءات النظام لإعادة التحميل السريع والاستبطان. يمكن للنظام توسيع نفسه أثناء التشغيل دون الحاجة إلى إعادة التشغيل.
 
-### Boot Sequence
+### تسلسل الإقلاع
 
 #### x86_64
 
 ```
 GRUB2 (multiboot2)
-  └─▶ boot.asm — long mode, 4 GiB identity map, 4 MiB stack
-        └─▶ main.c — GDT, IDT, PIC (8259A), PIT (100 Hz), COM1 serial
-              ├─▶ kthread.c — bootstrap-CPU native thread self-test
-              ├─▶ smp.c — ACPI MADT discovery, AP startup, per-CPU state, native AP worker dispatch
-              └─▶ hal.c — CPython init, freeze frozen modules
-                    └─▶ kernel.boot() — Python owns the machine
-                          ├─▶ PMM + VMM
-                          ├─▶ PCI enumeration + driver binding
-                          │     ├─▶ VirtIO-net (DMA descriptor rings)
-                          │     └─▶ Intel HDA (BDL DMA, codec)
-                          ├─▶ asyncio event loop (PIT-driven, 100 Hz)
-                          ├─▶ Network stack (ARP/IP/TCP)
-                          ├─▶ TCP REPL server (port 5000, multi-session)
-                          ├─▶ COM1 serial input driver
-                          └─▶ Interactive kernel shell (serial + TCP)
+  boot.asm — الوضع الطويل، خريطة هوية بحجم 4 جيجابايت، مكدس بحجم 4 ميجابايت
+        ← main.c ← GDT، IDT، PIC (8259A)، PIT (100 هرتز)، COM1 التسلسلي
+              ✓✓✓ kthread.c — اختبار ذاتي لخيط المعالج الأصلي bootstrap-CPU
+              smp.c — اكتشاف ACPI MADT، بدء تشغيل نقطة الوصول، حالة كل وحدة معالجة مركزية، إرسال عامل نقطة الوصول الأصلي
+              hal.c — تهيئة CPython، تجميد الوحدات النمطية المجمدة
+                    ← kernel.boot() — بايثون يمتلك الجهاز
+                          ✓✓✓ PMM + VMM
+                          تعداد PCI + ربط برنامج التشغيل
+                          â”‚ â”œâ”€â–¶ VirtIO-net (حلقات وصف DMA)
+                          "" - Intel HDA (BDL DMA، برنامج الترميز)
+                          ● حلقة أحداث غير متزامنة (مدفوعة بـ PIT، 100 هرتز)
+                          â”œâ”€â–¶ حزمة الشبكة (ARP/IP/TCP)
+                          â”œâ”€â–¶ خادم TCP REPL (المنفذ 5000، جلسات متعددة)
+                          برنامج تشغيل الإدخال التسلسلي COM1
+                          واجهة سطر الأوامر التفاعلية (منفذ تسلسلي + بروتوكول التحكم بالنقل TCP)
 ```
 
 #### arm64 (QEMU `virt`)
 
 ```
-U-Boot / QEMU direct kernel load
-  └─▶ boot_arm64.asm — EL1, MMU off, 4 MiB stack
-        └─▶ main_arm64.c — GIC v2, generic timer (100 Hz), PL011 serial
-              └─▶ hal.c — CPython init, freeze frozen modules
-                    └─▶ kernel.boot() — Python owns the machine
-                          ├─▶ PMM + VMM
-                          ├─▶ VirtIO-MMIO block device (raw disk image)
-                          ├─▶ asyncio event loop (GIC timer-driven)
-                          ├─▶ PL011 serial input driver
-                          └─▶ Interactive kernel shell (serial)
+تحميل النواة المباشر باستخدام U-Boot / QEMU
+  ← boot_arm64.asm ← EL1، وحدة إدارة الذاكرة معطلة، مكدس 4 ميجابايت
+        ● main_arm64.c — GIC v2، مؤقت عام (100 هرتز)، منفذ تسلسلي PL011
+              hal.c — تهيئة CPython، تجميد الوحدات النمطية المجمدة
+                    ← kernel.boot() — بايثون يمتلك الجهاز
+                          ✓✓✓ PMM + VMM
+                          ● جهاز كتلة VirtIO-MMIO (صورة قرص خام)
+                          ● حلقة أحداث asyncio (مدفوعة بمؤقت GIC)
+                          ✓✓✓✓ مشغل إدخال تسلسلي PL011
+                          ● واجهة سطر الأوامر التفاعلية (التسلسلية)
 ```
 
-### Expected Boot Output (x86_64)
+### مخرجات الإقلاع المتوقعة (x86_64)
 
 ```
-[PythonOS] INFO  kernel.boot: interrupt router connected
-[PythonOS] INFO  kernel.boot: PMM ready — 510 MiB free
-[PythonOS] INFO  kernel.boot: VMM ready
-[PythonOS] INFO  kernel.boot: enumerating PCI bus...
-[PythonOS] INFO  kernel.boot: 7 PCI devices found
-[PythonOS] INFO  kernel.boot: tmpfs mounted at /
-[PythonOS] INFO  kernel.boot: event loop ready
-[PythonOS] INFO  kernel: no framebuffer — serial only       # default boot
-[PythonOS] INFO  kernel: COM1 serial input ready
-[PythonOS] INFO  virtio-net: MAC 52:54:00:12:34:56
-[PythonOS] INFO  kernel: network stack starting
-[PythonOS] INFO  repl: TCP REPL listening on port 5000 — connect: nc localhost 5555
-[PythonOS] INFO  kernel: HDA sound ready
-[PythonOS] INFO  mixer: attached backend HDADriver
-[PythonOS] INFO  kernel: shell spawned — system ready
+[PythonOS] INFO kernel.boot: تم توصيل موجه المقاطعة
+[PythonOS] معلومات kernel.boot: PMM جاهز - 510 ميجابايت متوفرة
+[PythonOS] INFO kernel.boot: VMM جاهز
+[PythonOS] INFO kernel.boot: جارٍ تعداد ناقل PCI...
+[PythonOS] معلومات kernel.boot: تم العثور على 7 أجهزة PCI
+[PythonOS] معلومات kernel.boot: تم تركيب tmpfs في /
+[PythonOS] INFO kernel.boot: حلقة الأحداث جاهزة
+[PythonOS] معلومات النواة: لا يوجد إطار عرض - منفذ تسلسلي فقط # التمهيد الافتراضي
+[PythonOS] INFO kernel: مدخل التسلسل COM1 جاهز
+[PythonOS] معلومات virtio-net: MAC 52:54:00:12:34:56
+[PythonOS] معلومات: بدء تشغيل حزمة الشبكة
+[PythonOS] INFO repl: TCP REPL يستمع على المنفذ 5000 — الاتصال: nc localhost 5555
+[PythonOS] معلومات النواة: صوت HDA جاهز
+[PythonOS] معلومات: خلاط: تم إرفاق برنامج تشغيل HDA
+[PythonOS] معلومات النواة: تم تشغيل الصدفة - النظام جاهز
 
-PythonOS kernel shell
-Python 3.14.0
-Type 'help' for kernel commands.
+واجهة سطر أوامر نواة نظام التشغيل بايثون
+بايثون 3.14.0
+اكتب 'help' للاطلاع على أوامر النواة.
 
 >>>
 ```
 
-In `make run-gui` mode the framebuffer + GUI input substrate also come up:
+في وضع `make run-gui`، يظهر أيضًا إطار العرض + ركيزة إدخال واجهة المستخدم الرسومية:
 
 ```
-[PythonOS] boot: framebuffer found
-[PythonOS] INFO  kernel: framebuffer console ready
-[PythonOS] INFO  kernel: GUI input ready (PS/2 kbd+mouse)
+[PythonOS] boot: تم العثور على إطار العرض
+[PythonOS] معلومات النواة: وحدة تحكم إطار العرض جاهزة
+[PythonOS] INFO kernel: GUI input ready (PS/2 kbd+mouse)
 ```
 
-On arm64 with `make run-gui-arm64` the equivalent markers are:
+على معمارية arm64 باستخدام الأمر `make run-gui-arm64`، تكون العلامات المكافئة كما يلي:
 
 ```
-[PythonOS] INFO  ramfb: 1024x768x32 ready
-[PythonOS] INFO  virtio-input: ready at 0xa003e00
-[PythonOS] INFO  kernel: GUI input ready (virtio-input x2)
-[PythonOS] INFO  virtio-snd: ready at 0xa003a00 (stream 0, 48000 Hz / 2ch / S16)
-[PythonOS] INFO  kernel: virtio-snd ready
+[PythonOS] معلومات: ذاكرة الوصول العشوائي جاهزة (1024×768×32)
+[PythonOS] INFO virtio-input: جاهز عند 0xa003e00
+[PythonOS] INFO kernel: GUI input ready (virtio-input x2)
+[PythonOS] INFO virtio-snd: جاهز عند 0xa003a00 (التدفق 0، 48000 هرتز / 2 قناة / S16)
+[PythonOS] معلومات النواة: virtio-snd جاهز
 ```
 
-### Source Layout
+### تخطيط المصدر
 
 ```
 src/
-  boot/         asm + C bootstrap: GDT, IDT, PIC, PIT, serial, framebuffer (x86_64)
-                boot_arm64.asm, main_arm64.c — GIC, generic timer (arm64)
-  hal/          hal.c — _hal Python C extension (port I/O, MMIO, interrupts, DMA)
-  libc/         freestanding libc: buddy allocator, string, stdio, POSIX stubs
+  boot/ asm + C bootstrap: GDT, IDT, PIC, PIT, serial, framebuffer (x86_64)
+                boot_arm64.asm، main_arm64.c — GIC، مؤقت عام (arm64)
+  hal/ hal.c — امتداد بايثون C _hal (إدخال/إخراج المنافذ، MMIO، المقاطعات، DMA)
+  مكتبة libc/ مكتبة libc المستقلة: مُخصِّص الذاكرة المُرافق، سلسلة نصية، إدخال/إخراج قياسي، نماذج POSIX
 
-kernel/
-  __init__.py        boot() entry point — wires all subsystems
-  hal/               thin Python wrapper over _hal
-  interrupts/        interrupt router, @interrupt decorator, default handlers
-  bus/pci.py         PCI enumeration (CF8/CFC), driver Protocol, PCIBus
-  display/           framebuffer + bitmap font console
-  log.py             serial logging via _hal (arch-aware: COM1 / PL011)
-  memory/            PMM (page frame allocator), VMM (virtual address spaces)
-  drivers/
-    input/
-      com1.py        COM1 16550A serial input (x86_64 headless)
-      pl011.py       PL011 UART input (arm64 virt)
-      virtio_input.py virtio-input keyboard + mouse + tablet over MMIO (arm64)
-    keyboard.py      PS/2 keyboard (x86; IRQ1, scancode set 1)
-    mouse.py         PS/2 mouse (x86; IRQ12, 3-byte packet)
-    net/
-      virtio_net.py  VirtIO-net driver (DMA descriptor rings)
-    block/
-      virtio_blk.py  VirtIO-MMIO block driver (arm64)
-    display/
-      bochs.py       bochs-display PCI driver (x86 GUI)
-      ramfb.py       arm64 ramfb via fw_cfg
-      fwcfg.py       fw_cfg helper
-    sound/
-      virtio_snd.py  arm64 virtio-snd backend
-  sound/
-    hda.py           Intel HDA driver (BDL DMA, codec configuration)
-    mixer.py         arch-neutral PCM playback API (Mixer)
-  gui/                 GUI subsystem — opt-in, only active under run-gui / run-desktop
-    input.py         canonical Event + EventQueue; PS/2 + virtio-input bridges
-    compositor.py    stacking window manager (Tab focus, drag, click-to-focus)
-    sdl2/            PySDL2-compatible Python API (Init, Window, Surface, Renderer,
-                     events, sdlmixer, sdlttf — see docs/gui.md)
-    image/           image decoders: bmp, ppm, png (with pure-Python deflate), jpeg
-  net/
-    ethernet.py      Ethernet frame encode/decode
-    arp.py           ARP request/reply
-    ip.py            IPv4 packet encode/decode, checksum
-    tcp.py           TCP state machine (connect + listen/accept)
-    stack.py         Network stack init, ARP/IP dispatch
-    repl_server.py   Multi-session TCP REPL server (port 5000)
-  fs/                VFS (POSIX-like fd table, CREAT/TRUNC, async protocol) + tmpfs
-  ed.py              ed-style line editor used by /bin/ed.py
-  scheduler.py       asyncio task scheduler (ps, spawn)
-  shell.py           kernel shell: Python REPL + bare-word /bin dispatch + sh() sub-REPL
+النواة/
+  نقطة دخول __init__.py boot() — تقوم بتوصيل جميع الأنظمة الفرعية
+  hal/ thin Python wrapper over _hal
+  المقاطعات/ موجه المقاطعات، مُزخرف @interrupt، المعالجات الافتراضية
+  bus/pci.py تعداد PCI (CF8/CFC)، بروتوكول برنامج التشغيل، PCIBus
+  وحدة عرض/مخزن الإطارات + خط الصورة النقطية
+  تسجيل البيانات التسلسلي باستخدام log.py عبر _hal (متوافق مع البنية: COM1 / PL011)
+  الذاكرة/ PMM (مخصص إطار الصفحة)، VMM (مساحات العناوين الافتراضية)
+  السائقون/
+    مدخل/
+      com1.py COM1 16550A مدخل تسلسلي (x86_64 بدون شاشة)
+      pl011.py مدخل UART لـ PL011 (arm64 virt)
+      virtio_input.py لوحة مفاتيح + فأرة + لوحة رسم virtio-input عبر MMIO (arm64)
+    keyboard.py لوحة مفاتيح PS/2 (x86؛ IRQ1، مجموعة رموز المسح 1)
+    mouse.py فأرة PS/2 (x86؛ IRQ12، حزمة 3 بايت)
+    شبكة/
+      برنامج تشغيل VirtIO-net (حلقات وصف DMA) virtio_net.py
+    حاجز/
+      virtio_blk.py برنامج تشغيل كتلة VirtIO-MMIO (arm64)
+    عرض/
+      برنامج تشغيل شاشة العرض bochs-display PCI (واجهة مستخدم رسومية x86)
+      ramfb.py arm64 ramfb عبر fw_cfg
+      fwcfg.py fw_cfg helper
+    صوت/
+      virtio_snd.py arm64 virtio-snd backend
+  صوت/
+    برنامج تشغيل Intel HDA (BDL DMA، تكوين الترميز) hda.py
+    mixer.py واجهة برمجة تطبيقات تشغيل PCM محايدة معمارياً (Mixer)
+  نظام واجهة المستخدم الرسومية (GUI) - اختياري، يعمل فقط ضمن تشغيل واجهة المستخدم الرسومية / تشغيل سطح المكتب
+    ملف input.py: حدث أساسي + قائمة انتظار الأحداث؛ جسور PS/2 + virtio-input
+    مدير النوافذ المكدسة compositor.py (التركيز باستخدام مفتاح Tab، السحب، النقر للتركيز)
+    واجهة برمجة تطبيقات بايثون متوافقة مع sdl2/PySDL2 (التهيئة، النافذة، السطح، المُرَندِر،
+                     الأحداث، sdlmixer، sdlttf - انظر docs/gui.md)
+    فك تشفير الصور: bmp، ppm، png (مع deflate مكتوب بلغة بايثون خالصة)، jpeg
+  شبكة/
+    ethernet.py تشفير/فك تشفير إطار إيثرنت
+    arp.py طلب/استجابة ARP
+    ip.py تشفير/فك تشفير حزم IPv4، مجموع التحقق
+    tcp.py آلة حالة TCP (اتصال + استماع/قبول)
+    ملف stack.py: تهيئة حزمة الشبكة، وتوزيع بروتوكول ARP/IP
+    repl_server.py خادم REPL متعدد الجلسات عبر بروتوكول TCP (المنفذ 5000)
+  نظام الملفات/نظام الملفات الافتراضي (جدول واصفات الملفات الشبيه بنظام POSIX، إنشاء/حذف، بروتوكول غير متزامن) + نظام الملفات المؤقت
+  محرر الأسطر ed.py بنمط ed المستخدم بواسطة /bin/ed.py
+  scheduler.py asyncio task scheduler (ps, spawn)
+  shell.py kernel shell: Python REPL + الأمر /bin dispatch + sh() sub-REPL
 
-apps/                  built-in GUI applications (frozen, registered via apps.registry)
-  terminal/          Python REPL inside a CompositorWindow
-  editor/            ed line editor in a window
-  files/             arrow-key file browser
-  image_viewer/      BMP / PPM / PNG / JPEG viewer
-  demos/             bouncing_ball (graphics), audio_tone (440 Hz)
-  _textwin.py        shared text-grid view used by terminal + editor
+التطبيقات/ تطبيقات واجهة المستخدم الرسومية المدمجة (مُجمدة، مسجلة عبر apps.registry)
+  الطرفية/ واجهة برمجة تطبيقات بايثون التفاعلية داخل نافذة مركبة
+  محرر/محرر سطور في نافذة
+  ملفات/ مستعرض الملفات باستخدام مفاتيح الأسهم
+  عارض الصور / عارض صور BMP / PPM / PNG / JPEG
+  demos/ bouncing_ball (graphics), audio_tone (440 Hz)
+  _textwin.py عرض شبكة نصية مشتركة يستخدمها الطرفية والمحرر
 
-bin/  (seeded in tmpfs at boot — add .py files here to create new shell commands)
-  ls.py, ps.py, pwd.py, cd.py, cat.py, cp.py, mv.py, ftp.py, ed.py — filesystem / transfer utilities
-  sysinfo.py, netstat.py                                  — system / network status
-  pythonos_gui.py                                          — desktop launcher
+bin/ (يتم تهيئته في tmpfs عند بدء التشغيل - أضف ملفات .py هنا لإنشاء أوامر shell جديدة)
+  ls.py، ps.py، pwd.py، cd.py، cat.py، cp.py، mv.py، ftp.py، ed.py - أدوات نظام الملفات / النقل
+  sysinfo.py، netstat.py - حالة النظام / الشبكة
+  pythonos_gui.py — مشغل سطح المكتب
 
-examples/          frozen runnable demos, also seeded as readable source in /examples
-  hello_kernel.py, vfs_demo.py, async_tasks.py, primes.py, tone.py,
-  recv_file.py, send_file.py
-  fb_test.py, sdl_hello.py, sdl_renderer.py, sdl_text.py,
-  sdl_image.py (PNG corpus), sdl_jpeg.py (JPEG corpus)
+أمثلة/ عروض توضيحية قابلة للتنفيذ، متوفرة أيضًا كمصدر قابل للقراءة في /examples
+  hello_kernel.py، vfs_demo.py، async_tasks.py، primes.py، tone.py،
+  recv_file.py، send_file.py
+  fb_test.py، sdl_hello.py، sdl_renderer.py، sdl_text.py،
+  sdl_image.py (مجموعة صور PNG)، sdl_jpeg.py (مجموعة صور JPEG)
 
-asyncio/             bare-metal asyncio (no socket/selectors): Future, Task,
-                     Queue, Event, Lock, Semaphore, sleep, wait_for, gather
+asyncio/ asyncio على مستوى النظام الأساسي (بدون مقبس/محددات): المستقبل، المهمة،
+                     قائمة الانتظار، الحدث، القفل، الإشارة، السكون، الانتظار، التجميع
 
-tests/
-  smoke_test.py            x86 default smoke (TCP REPL based)
-  smoke_test_arm64.py      arm64 default smoke (PL011 serial)
-  gui_smoke_test.py        x86 GUI smoke (sdl2 corpus + compositor + pixel checks)
-  gui_smoke_test_arm64.py  arm64 GUI smoke (ramfb + virtio-input + screendump)
-  desktop_smoke_test.py    end-to-end pythonos_gui auto-launch + tile-hash golden
-  audio_smoke_test.py      WAV-capture audio pipeline check
-  qmp_helper.py            QEMU monitor wrapper (screendump, sendkey, mouse_*)
-  goldens/x86_64/          checked-in tile-hash goldens (refresh: PYTHONOS_GOLDEN_REFRESH=1)
+اختبارات/
+  smoke_test.py x86 افتراضي (يعتمد على TCP REPL)
+  smoke_test_arm64.py arm64 default smoke (PL011 serial)
+  gui_smoke_test.py x86 GUI smoke (sdl2 corpus + compositor + pixel checks)
+  gui_smoke_test_arm64.py arm64 GUI smoke (ramfb + virtio-input + screendump)
+  desktop_smoke_test.py اختبار شامل لواجهة المستخدم الرسومية pythonos_gui مع التشغيل التلقائي + تجزئة البلاطات الذهبية
+  audio_smoke_test.py فحص مسار التقاط الصوت WAV
+  qmp_helper.py غلاف مراقبة QEMU (screendump, sendkey, mouse_*)
+  goldens/x86_64/ checked-in tile-hash goldens (refresh: PYTHONOS_GOLDEN_REFRESH=1)
 
-tools/
-  freeze_kernel.py   compiles kernel + apps + examples → frozen C bytecode in the ELF
-  run_desktop.py     boots QEMU then auto-sends `pythonos_gui` to the TCP REPL
-  stdlib_stubs/      bare-metal replacements for stdlib modules that assume
-                     a POSIX host (dataclasses, functools, os, ctypes, sdl2, …)
-  Dockerfile         Ubuntu 24.04 cross-compilation environment
-  setup_cpython.sh   fetch, patch, and configure CPython 3.14 for bare metal
+أدوات/
+  يقوم الملف freeze_kernel.py بتجميع النواة والتطبيقات والأمثلة ← بايت كود C مجمد في ملف ELF
+  يقوم run_desktop.py بتشغيل QEMU ثم يرسل تلقائيًا `pythonos_gui` إلى واجهة TCP التفاعلية
+  stdlib_stubs/ بدائل مباشرة لوحدات stdlib التي تفترض
+                     مضيف POSIX (فئات البيانات، أدوات الوظائف، نظام التشغيل، أنواع البيانات، sdl2، ...)
+  بيئة الترجمة المتقاطعة لنظام التشغيل أوبونتو 24.04 (ملف Dockerfile)
+  يقوم الملف setup_cpython.sh بجلب وتحديث وتكوين CPython 3.14 للأنظمة الأساسية.
 
-deps/
-  Modules.Setup.local  CPython built-in module list (excludes socket/select/…)
-  cpython/           built libpython3.14.a + headers (generated; not in git)
-  cpython-src/       CPython 3.14.0 source (generated; not in git)
+dep/
+  Modules.Setup.local قائمة الوحدات النمطية المضمنة في CPython (باستثناء socket/select/…)
+  تم بناء مكتبة libpython3.14.a + ملفات الرأس (تم إنشاؤها؛ غير موجودة في git) بواسطة cpython/
+  cpython-src/ مصدر CPython 3.14.0 (تم إنشاؤه؛ غير موجود في git)
 ```
 
 ---
 
-## Architecture Notes
+ملاحظات معمارية |#
 
-### CPython on Bare Metal
+### CPython على نظام تشغيل أساسي
 
-CPython 3.14.0 is compiled as a static library (`libpython3.14.a`) linked directly into the kernel ELF. `Py_Initialize()` runs before any Python code; from that point forward, the Python interpreter is the kernel runtime.
+يتم تجميع CPython 3.14.0 كمكتبة ثابتة (`libpython3.14.a`) مرتبطة مباشرةً بملف ELF الخاص بنواة النظام. يتم تشغيل `Py_Initialize()` قبل أي كود بايثون؛ ومن تلك اللحظة فصاعدًا، يصبح مترجم بايثون هو وقت تشغيل نواة النظام.
 
-All kernel Python modules are **frozen** — compiled to bytecode and embedded in the ELF as C arrays. There is no filesystem required for `import`. The freeze tool (`tools/freeze_kernel.py`) runs at build time and produces `build/frozen_kernel.c`.
+جميع وحدات بايثون الخاصة بنواة النظام مُجمّدة، حيث تُترجم إلى بايت كود وتُضمّن في ملف ELF كمصفوفات C. لا يتطلب الأمر نظام ملفات لاستيراد الوحدات. تعمل أداة التجميد (tools/freeze_kernel.py) أثناء عملية البناء وتُنتج الملف `build/frozen_kernel.c`.
 
-### `_hal` C Extension
+### امتداد لغة C `_hal`
 
-`src/hal/hal.c` implements the `_hal` built-in Python module, compiled into the kernel. It exposes:
+يُنفّذ الملف `src/hal/hal.c` وحدة بايثون المدمجة `_hal`، والمُجمّعة في نواة النظام. وهو يُتيح ما يلي:
 
-| Function | Description |
+| الوظيفة | الوصف |
 |---|---|
-| `inb/inw/inl(port)` | Port I/O reads (x86_64) |
-| `outb/outw/outl(port, val)` | Port I/O writes (x86_64) |
-| `mmio_read8/32(addr)` | Memory-mapped I/O reads |
-| `mmio_write8/32(addr, val)` | Memory-mapped I/O writes |
-| `dma_alloc(size)` | Allocate zeroed C-heap DMA buffer, return physical address |
-| `buf_addr(bytearray)` | Return physical address of bytearray's internal buffer |
-| `read_cr2/cr3()` | Control register reads (x86_64) |
-| `set_interrupt_router(fn)` | Register Python interrupt dispatcher |
-| `set_event_loop(loop)` | Register asyncio loop for interrupt-safe dispatch |
-| `ARCH` | String constant: `"x86_64"` or `"arm64"` |
+| `inb/inw/inl(port)` | عمليات قراءة الإدخال/الإخراج للمنفذ (x86_64) |
+| `outb/outw/outl(port, val)` | يكتب منفذ الإدخال/الإخراج (x86_64) |
+| `mmio_read8/32(addr)` | عمليات قراءة الإدخال/الإخراج المُرتبطة بالذاكرة |
+| `mmio_write8/32(addr, val)` | عمليات الكتابة باستخدام الذاكرة المخصصة للإدخال/الإخراج |
+| `dma_alloc(size)` | تخصيص مخزن مؤقت DMA مُصفّر في كومة C، وإرجاع العنوان الفعلي |
+| `buf_addr(bytearray)` | إرجاع العنوان الفعلي للمخزن المؤقت الداخلي لـ bytearray |
+| `read_cr2/cr3()` | قراءة سجلات التحكم (x86_64) |
+| `set_interrupt_router(fn)` | تسجيل مُرسِل المقاطعات في بايثون |
+| `set_event_loop(loop)` | تسجيل حلقة asyncio لإرسال آمن للمقاطعات |
+| `ARCH` | ثابت السلسلة: `"x86_64"` أو `"arm64"` |
 
-### DMA Memory
+ذاكرة DMA##
 
-Python's garbage collector must never touch DMA buffers (device-visible memory). `_hal.dma_alloc(n)` allocates from the C buddy allocator (`calloc`) and returns an integer physical address. The GC cannot see this allocation. This is used by VirtIO-net descriptor rings, HDA BDLs, and RX packet buffers.
+يجب ألا يقوم جامع البيانات المهملة في بايثون بالوصول إلى مخازن DMA (الذاكرة المرئية للجهاز). تقوم الدالة `_hal.dma_alloc(n)` بتخصيص الذاكرة من مُخصِّص الذاكرة المساعد في لغة C (`calloc`) وتعيد عنوانًا فعليًا صحيحًا. لا يستطيع جامع البيانات المهملة رؤية هذا التخصيص. يُستخدم هذا العنوان بواسطة حلقات وصف VirtIO-net، وHDA BDLs، ومخازن حزم RX.
 
-### Bare-Metal asyncio
+### مزامنة غير متزامنة على المعدن الخام
 
-The `asyncio/` package is a from-scratch implementation of the asyncio API — no `select`, no sockets, no `selectors`. The event loop is driven by the PIT timer on x86_64 or the GIC generic timer on arm64 (both at 100 Hz), with hardware interrupt callbacks routed through `call_soon_threadsafe`. Full API: `Future`, `Task`, `Queue`, `Event`, `Lock`, `Semaphore`, `sleep`, `wait_for`, `gather`, `ensure_future`.
+حزمة `asyncio/` هي تطبيق مُعاد بناؤه بالكامل لواجهة برمجة تطبيقات asyncio - بدون `select`، أو مقابس، أو `selectors`. يتم تشغيل حلقة الأحداث بواسطة مؤقت PIT على معالجات x86_64 أو مؤقت GIC العام على معالجات arm64 (كلاهما بتردد 100 هرتز)، مع توجيه استدعاءات مقاطعة الأجهزة عبر `call_soon_threadsafe`. واجهة برمجة التطبيقات الكاملة: `Future`، `Task`، `Queue`، `Event`، `Lock`، `Semaphore`، `sleep`، `wait_for`، `gather`، `ensure_future`.
 
-### Multi-Session TCP REPL
+### جلسة تفاعلية متعددة الجلسات لبروتوكول TCP
 
-The REPL server (`kernel/net/repl_server.py`) listens on TCP port 5000. Each incoming connection spawns a new `asyncio` task running an independent `Shell` instance. All sessions share the same live kernel namespace — `scheduler`, `vfs`, `pci_bus`, the network stack — because they are all coroutines inside the same Python process that *is* the kernel. This is the most direct possible demonstration that Python-as-kernel supports preemptive multitasking: multiple interactive sessions, zero threads, zero processes, one interpreter.
+يستمع خادم REPL (`kernel/net/repl_server.py`) على منفذ TCP رقم 5000. يُنشئ كل اتصال وارد مهمة `asyncio` جديدة تُشغّل نسخة مستقلة من `Shell`. تشترك جميع الجلسات في نفس مساحة اسم النواة الحية - `scheduler`، و`vfs`، و`pci_bus`، ومكدس الشبكة - لأنها جميعًا عبارة عن إجراءات فرعية داخل نفس عملية بايثون التي تُمثّل النواة. هذا هو أوضح دليل ممكن على أن بايثون كنواة تدعم تعدد المهام الاستباقي: جلسات تفاعلية متعددة، بدون خيوط، بدون عمليات، ومفسر واحد.
 
-### Stdlib Stubs
+### نماذج مكتبة قياسية
 
-Several stdlib modules assume a POSIX host and break on bare metal. `tools/stdlib_stubs/` contains replacements:
+تعتمد العديد من وحدات المكتبة القياسية على نظام POSIX المضيف، وتتعطل على الأجهزة التي تعمل مباشرةً دون تهيئة. يحتوي المجلد `tools/stdlib_stubs/` على بدائل لها.
 
-| Stub | Why it exists |
+| مقال قصير | لماذا يوجد؟ |
 |---|---|
-| `dataclasses.py` | CPython's version uses `exec()` to generate `__init__` etc., which fails on bare metal with a spurious `SyntaxError`. Rewritten using closures. |
-| `functools.py` | `_CacheInfo = namedtuple(...)` uses `eval()`. Replaced with a plain class. |
-| `os.py` | The real `os.py` imports `posix` which expects `_have_functions`. Minimal stub. |
-| `ctypes/__init__.py` | `_ctypes` is not compiled in (requires libffi). Minimal stub for `addressof`; prefer `_hal.dma_alloc` for DMA. |
-| `random.py` | Minimal LCG PRNG seeded from PIT port reads. |
-| `traceback.py` | CPython 3.14's version imports `_colorize` (not compiled in). Minimal format_exc. |
-| `linecache.py` | No source files on bare metal; no-op cache. |
-| `inspect.py`, `pathlib.py` | Minimal stubs used during module discovery. |
+| `dataclasses.py` | يستخدم إصدار CPython الدالة `exec()` لإنشاء `__init__` وما إلى ذلك، مما يؤدي إلى فشله على النظام الأساسي مع ظهور خطأ `SyntaxError` غير متوقع. تمت إعادة كتابته باستخدام الدوال المغلقة. |
+| `functools.py` | `_CacheInfo = namedtuple(...)` يستخدم `eval()`. تم استبداله بفئة عادية. |
+| `os.py` | يستورد الملف `os.py` الحقيقي `posix` الذي يتوقع `_have_functions`. نموذج أولي بسيط. |
+| `ctypes/__init__.py` | لم يتم تجميع `_ctypes` (يتطلب libffi). نموذج أولي بسيط لـ `addressof`؛ يُفضل استخدام `_hal.dma_alloc` لـ DMA. |
+| `random.py` | مولد أرقام عشوائية زائفة LCG بسيط مُهيأ من قراءات منفذ PIT. |
+| `traceback.py` | يستورد إصدار CPython 3.14 الدالة `_colorize` (غير مُضمنة في الكود). الحد الأدنى من استثناءات التنسيق. |
+| `linecache.py` | لا توجد ملفات مصدرية على الجهاز الأساسي؛ ذاكرة تخزين مؤقتة بدون عمليات. |
+| `inspect.py`, `pathlib.py` | الحد الأدنى من الملفات الوهمية المستخدمة أثناء اكتشاف الوحدات النمطية. |
 
-Real stdlib files that *are* frozen verbatim: `enum`, `typing`, `operator`, `types`, `reprlib`, `keyword`, `copy`, `weakref`, `_weakrefset`, `contextlib`, `warnings`, `copyreg`, `struct`, `codeop`, `__future__`, `re`, `collections`.
-
----
-
-## Building CPython for Bare Metal
-
-The CPython configuration disables everything that requires a host OS:
-
-- No `socket`, `select`, `selectors`, `ssl`, `readline`, `termios`
-- No `fork`, `exec`, `subprocess`
-- No dynamic loading (`dlopen`)
-- Built-in modules only: `_struct`, `_collections`, `_functools`, `_io`, `_signal`, `math`, `_warnings`, `_weakref`, `_abc`, `_json`, `_csv`, `_datetime`, `_pickle`, `_random`, `_bisect`, `_heapq`, `_operator`, `_stat`, `array`, `binascii`, `zlib`, `_hashlib`, `_sha256`, `_sha512`, `_blake2`, `_md5`, and `_hal`
-
-See `deps/Modules.Setup.local` for the complete list and `tools/setup_cpython.sh` for the configure flags.
+ملفات المكتبة القياسية الحقيقية التي تم تجميدها حرفيًا: `enum`, `typing`, `operator`, `types`, `reprlib`, `keyword`, `copy`, `weakref`, `_weakrefset`, `contextlib`, `warnings`, `copyreg`, `struct`, `codeop`, `__future__`, `re`, `collections`.
 
 ---
 
-## The Totally True and Not At All Embellished History of PythonOS
+## بناء CPython للأنظمة الأساسية
 
-### The continuing adventures of Jordan Hubbard and Sir Reginald von Fluffington III
+يؤدي تكوين CPython إلى تعطيل كل شيء يتطلب نظام تشغيل مضيف:
 
-> *Part 6 of an ongoing chronicle.  [← Part 5: WebMux](https://github.com/jordanhubbard/webmux#the-totally-true-and-not-at-all-embellished-history-of-webmux)*
-> *Sir Reginald von Fluffington III appears throughout.  He does not endorse any of it.*
+- لا يوجد `socket`، `select`، `selectors`، `ssl`، `readline`، `termios`
+- ممنوع استخدام `fork` أو `exec` أو `subprocess`
+- لا يوجد تحميل ديناميكي (`dlopen`)
+- الوحدات المدمجة فقط: `_struct`، `_collections`، `_functools`، `_io`، `_signal`، `math`، `_warnings`، `_weakref`، `_abc`، `_json`، `_csv`، `_datetime`، `_pickle`، `_random`، `_bisect`، `_heapq`، `_operator`، `_stat`، `array`، `binascii`، `zlib`، `_hashlib`، `_sha256`، `_sha512`، `_blake2`، `_md5`، و`_hal`
 
-It began, as many of the programmer's projects do, with a sentence that sounded completely reasonable at the time.
-
-"The kernel," he announced to the living room at large, "should be written in Python."
-
-Sir Reginald von Fluffington III was asleep on top of the programmer's copy of *Modern Operating Systems*, which he had been using as a mat for three weeks and had no intention of vacating. He did not open his eyes. He did not move. He did, however, lower one ear approximately four degrees — the feline equivalent of a raised eyebrow — before returning to the serious business of being unconscious.
-
-The programmer took this as encouragement.
-
-The idea was not new, exactly. Embedded Python had existed for years. MicroPython ran on microcontrollers. Plenty of people had run Python *on* operating systems. But running Python *as* the operating system — as the interrupt handler, the memory manager, the scheduler, the filesystem, the network stack — that was a different claim. The programmer called it "elegant." Sir Reginald, who had heard this word applied to seventeen previous decisions of varying quality, updated a private ledger entry he maintained under the heading *"Hubris, General."*
-
-The first problem was CPython itself. The interpreter was designed to run on a POSIX host. It expected `fork`. It expected `select`. It expected a great many things that do not exist when the machine has just powered on and there is no OS beneath you. The programmer spent several weeks writing `configure` flags that deleted these expectations one at a time, like a careful editor removing every assumption that civilization exists. The result was `libpython3.14.a`: a static library containing the full Python interpreter, stripped of every syscall it had ever trusted, linked directly into the kernel ELF.
-
-"No `socket`. No `readline`. No `fork`," the programmer told Sir Reginald, presenting the `Modules.Setup.local` like a trophy. Sir Reginald examined it by sitting on it. Then he sat on the keyboard. The programmer, interpreting this as a request for a demonstration, moved the cat, opened a terminal, and typed `make run`.
-
-The kernel booted. Python initialized. The `>>>` prompt appeared on the serial console. Sir Reginald, who had relocated to the cable routing behind the monitor, was unavailable for comment.
-
-What made the project genuinely strange was the interrupt model. In a normal OS, hardware interrupts are handled in C, which carefully manages processor state before dispatching to higher-level code. In PythonOS, the C bootstrap handles the raw vector, then immediately calls `asyncio.get_event_loop().call_soon_threadsafe(interrupt_router, vector)` — and Python takes it from there. The PIT timer fires 100 times a second. The GIC fires 100 times a second on arm64. Both route through the same Python `@interrupt` decorator. The scheduler is `asyncio`. The kernel shell is `await shell.run()`. The entire operating system is, at runtime, a set of coroutines.
-
-Sir Reginald was not impressed by this. He had watched the programmer write asynchronous code before and knew where it ended: debugging `asyncio.ensure_future` at two in the morning while muttering about the event loop.
-
-The arm64 port required a separate detour. QEMU's `virt` machine has no PCI bus — only VirtIO-MMIO, a GIC interrupt controller, and a PL011 UART. The programmer ported the timer, the serial driver, and the block device by reading ARM Architecture Reference Manual sections that Sir Reginald found structurally identical to the programmer's earlier operating systems reading in that both involved large books and produced no tuna.
-
-The TCP REPL was the part the programmer was most pleased with. Having added a TCP stack from scratch — ARP resolution, IPv4, a basic TCP state machine with SYN/SYN-ACK/ACK, FIN handling, a `TCPListener` class — he wired it to the kernel shell and exposed it on port 5000. QEMU forwarded host port 5555 to guest port 5000. `nc localhost 5555` connected to a live Python interpreter that *was* the kernel. Multiple sessions could run simultaneously. Each session shared the same live kernel objects — `vfs`, `scheduler`, the PCI bus — because they were all coroutines in the same process that happened to be the operating system.
-
-"This," the programmer said, "proves that Python is a real multitasking kernel."
-
-Sir Reginald walked across the keyboard. The shell printed `TypeError: unsupported operand` and terminated. The programmer noted this was a separate bug and filed it accordingly.
-
-The smoke test was added last, as things tend to be when the thing being tested is a kernel that takes forty-five seconds to compile and requires QEMU to run. `tests/smoke_test.py` boots the ISO as a subprocess, waits for the TCP REPL to become reachable, connects, and verifies that `1 + 1` returns `2`, that `vfs is not None` returns `True`, that `1 / 0` raises `ZeroDivisionError`, and that the kernel's scheduler and filesystem are alive and accessible from a remote TCP session. If any of these fail, `make test` exits non-zero. Sir Reginald has never run `make test`. He has, however, sat on the test output twice, which the programmer is counting as a code review.
-
-As of this writing, PythonOS has been used in production by exactly one person, who also wrote it. Sir Reginald continues to withhold his endorsement across all 6 projects, citing "procedural concerns," "insufficient tuna," "a general atmosphere of hubris," and, now, "the fundamental unseriousness of an operating system that can be interrupted by the garbage collector."
+راجع `deps/Modules.Setup.local` للاطلاع على القائمة الكاملة و `tools/setup_cpython.sh` للاطلاع على علامات التكوين.
 
 ---
 
-## License
+## التاريخ الحقيقي تمامًا وغير المزخرف لنظام التشغيل بايثون
 
-BSD 2-Clause. See [LICENSE](LICENSE).
+### المغامرات المستمرة لجوردان هوبارد والسير ريجينالد فون فلافينغتون الثالث
+
+> *الجزء السادس من سلسلة متواصلة. [← الجزء الخامس: WebMux](https://github.com/jordanhubbard/webmux#the-totally-true-and-not-at-all-embellished-history-of-webmux)*
+يظهر السير ريجينالد فون فلافينجتون الثالث في جميع أنحاء النص. وهو لا يؤيد أيًا من ذلك.
+
+بدأ الأمر، كما هو الحال مع العديد من مشاريع المبرمج، بجملة بدت معقولة تماماً في ذلك الوقت.
+
+"يجب كتابة النواة بلغة بايثون"، أعلن ذلك أمام جميع الحاضرين في غرفة المعيشة.
+
+كان السير ريجينالد فون فلافينجتون الثالث نائمًا فوق نسخة المبرمج من كتاب *أنظمة التشغيل الحديثة*، والتي كان يستخدمها كفرش لمدة ثلاثة أسابيع ولم يكن ينوي مغادرتها. لم يفتح عينيه. لم يتحرك. إلا أنه خفض إحدى أذنيه حوالي أربع درجات - وهي حركة تُشبه رفع الحاجب عند القطط - قبل أن يعود إلى نومه العميق.
+
+اعتبر المبرمج ذلك بمثابة تشجيع.
+
+لم تكن الفكرة جديدة تمامًا. فقد كان بايثون المدمج موجودًا منذ سنوات. وكان مايكرو بايثون يعمل على المتحكمات الدقيقة. وقد قام الكثيرون بتشغيل بايثون *على* أنظمة التشغيل. لكن تشغيل بايثون *كنظام التشغيل* - كمعالج للمقاطعات، ومدير للذاكرة، ومجدول، ونظام ملفات، ومكدس شبكة - كان أمرًا مختلفًا. وصفه المبرمج بأنه "أنيق". قام السير ريجينالد، الذي سمع هذه الكلمة تُطلق على سبعة عشر قرارًا سابقًا متفاوتة الجودة، بتحديث مدخل في دفتر حسابات خاص كان يحتفظ به تحت عنوان *"الغطرسة، أيها الجنرال".*
+
+كانت المشكلة الأولى تكمن في CPython نفسه. صُمم المفسر للعمل على مضيف POSIX، وكان يتوقع وجود `fork` و`select`، بالإضافة إلى العديد من الأشياء الأخرى غير الموجودة عند تشغيل الجهاز مباشرةً دون وجود نظام تشغيل. أمضى المبرمج أسابيع في كتابة خيارات `configure` لحذف هذه التوقعات واحدة تلو الأخرى، تمامًا كما يفعل محرر دقيق يُزيل كل افتراضات وجودية. وكانت النتيجة `libpython3.14.a`: مكتبة ثابتة تحتوي على مفسر بايثون كاملًا، مُجردًا من جميع استدعاءات النظام التي كان يثق بها، ومرتبطًا مباشرةً بملف ELF الخاص بنواة النظام.
+
+قال المبرمج للسير ريجينالد، وهو يُقدّم ملف "Modules.Setup.local" كجائزة: "لا يوجد `socket`. لا يوجد `readline`. لا يوجد `fork`". فحص السير ريجينالد الملف بالجلوس عليه، ثم جلس على لوحة المفاتيح. ففهم المبرمج ذلك على أنه طلبٌ لعرضٍ عملي، فأزاح القطة، وفتح نافذة طرفية، وكتب الأمر "make run".
+
+تم تشغيل النواة. تم تهيئة بايثون. ظهرت موجه الأوامر `>>>` على وحدة التحكم التسلسلية. لم يكن السير ريجينالد، الذي انتقل إلى مسار الكابلات خلف الشاشة، متاحًا للتعليق.
+
+ما جعل المشروع غريبًا حقًا هو نموذج المقاطعات. في نظام التشغيل العادي، تُعالج مقاطعات الأجهزة بلغة C، التي تُدير حالة المعالج بعناية قبل إرسالها إلى التعليمات البرمجية ذات المستوى الأعلى. أما في PythonOS، فيتولى برنامج التمهيد C معالجة المتجه الخام، ثم يستدعي مباشرةً `asyncio.get_event_loop().call_soon_threadsafe(interrupt_router, vector)`، ويتولى بايثون باقي العملية. يعمل مؤقت PIT مئة مرة في الثانية، وكذلك GIC على معالج arm64. وكلاهما يمر عبر مُزخرف `@interrupt` في بايثون. المُجدول هو `asyncio`، وواجهة سطر الأوامر هي `await shell.run()`. نظام التشغيل بأكمله، أثناء التشغيل، عبارة عن مجموعة من الروتينات الفرعية.
+
+لم يُعجب السير ريجينالد بهذا. لقد شاهد المبرمج يكتب كودًا غير متزامن من قبل وكان يعرف إلى أين سينتهي الأمر: تصحيح أخطاء `asyncio.ensure_future` في الساعة الثانية صباحًا بينما يتمتم عن حلقة الأحداث.
+
+تطلّب منفذ arm64 مسارًا جانبيًا منفصلاً. لا تحتوي آلة QEMU الافتراضية على ناقل PCI، بل فقط VirtIO-MMIO، ووحدة تحكم مقاطعة GIC، ووحدة UART من نوع PL011. قام المبرمج بنقل المؤقت، وبرنامج تشغيل المنفذ التسلسلي، وجهاز الكتلة من خلال قراءة أقسام من دليل مرجع بنية ARM، والتي وجدها السير ريجينالد متطابقة هيكليًا مع أنظمة التشغيل السابقة التي كان المبرمج يقرأها، حيث تضمنت كلتاهما كتبًا ضخمة ولم تُنتج أي تونة.
+
+كانت واجهة TCP التفاعلية (REPL) الجزء الذي نال إعجاب المبرمج أكثر من غيره. فبعد أن أضاف حزمة بروتوكولات TCP من الصفر - بما في ذلك تحليل ARP، وIPv4، وآلة حالة TCP أساسية مع SYN/SYN-ACK/ACK، ومعالجة FIN، وفئة `TCPListener` - قام بتوصيلها بواجهة سطر الأوامر (kernel shell) وعرضها على المنفذ 5000. قام QEMU بإعادة توجيه منفذ المضيف 5555 إلى منفذ الضيف 5000. واتصل الأمر `nc localhost 5555` بمفسر بايثون مباشر كان هو النواة نفسها. ويمكن تشغيل جلسات متعددة في وقت واحد. تشترك كل جلسة في نفس كائنات النواة المباشرة - `vfs`، و`scheduler`، وناقل PCI - لأنها جميعًا كانت إجراءات فرعية (coroutines) ضمن نفس العملية التي كانت نظام التشغيل.
+
+قال المبرمج: "هذا يثبت أن بايثون هي نواة حقيقية متعددة المهام".
+
+مشى السير ريجينالد على لوحة المفاتيح. طبعت نافذة الأوامر رسالة الخطأ "TypeError: unsupported operand" ثم توقفت. لاحظ المبرمج أن هذا خطأ منفصل وقام بتسجيله وفقًا لذلك.
+
+أُضيف اختبار التحقق الأولي أخيرًا، كما هو معتاد عند اختبار نواة تستغرق 45 ثانية للتجميع وتتطلب QEMU للتشغيل. يقوم الملف `tests/smoke_test.py` بتشغيل ملف ISO كعملية فرعية، وينتظر حتى يصبح TCP REPL متاحًا، ثم يتصل، ويتحقق من أن `1 + 1` تُرجع `2`، وأن `vfs is not None` تُرجع `True`، وأن `1 / 0` تُثير خطأ `ZeroDivisionError`، وأن مُجدول النواة ونظام الملفات يعملان ويمكن الوصول إليهما من جلسة TCP عن بُعد. إذا فشل أي من هذه الاختبارات، يُنهي الأمر `make test` عمله برمز غير صفري. لم يُشغّل السير ريجينالد الأمر `make test` قط. مع ذلك، فقد اطلع على مُخرجات الاختبار مرتين، وهو ما يعتبره المبرمج بمثابة مراجعة للكود.
+
+حتى وقت كتابة هذه السطور، لم يُستخدم نظام التشغيل بايثون أو إس في بيئة الإنتاج إلا من قِبل شخص واحد فقط، وهو نفسه من قام بتطويره. ولا يزال السير ريجينالد يمتنع عن إبداء موافقته على المشاريع الستة جميعها، مُشيرًا إلى "مخاوف إجرائية"، و"نقص الموارد"، و"جو عام من الغرور"، والآن، إلى "عدم جدية نظام تشغيل يُمكن أن يُقاطعه جامع البيانات المهملة".
+
+---
+
+## رخصة
+
+رخصة BSD ذات البندين. انظر [LICENSE](LICENSE).
